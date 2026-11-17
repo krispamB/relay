@@ -56,6 +56,20 @@ export const AJV_OPTIONS = {
   },
 };
 
+/** The parts of an error that are safe to log (PRD §10.4): no `detail`, `where` or query parameters. */
+export function safeError(err: unknown): { name: string; code?: string; message: string; stack?: string } {
+  if (!(err instanceof Error)) return { name: 'NonError', message: 'a non-Error value was thrown' };
+  const code = (err as { code?: unknown }).code;
+  return {
+    name: err.name,
+    ...(typeof code === 'string' ? { code } : {}),
+    // A database error message can quote the offending value, so it is replaced.
+    message:
+      typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) ? 'database error' : err.message.slice(0, 300),
+    stack: err.stack?.split('\n').slice(1, 12).join('\n'),
+  };
+}
+
 /** Maps ApiError and validation failures to the public error body. Never leaks internals. */
 export function installErrorHandling(app: AnyApp): void {
   app.setErrorHandler((err: unknown, req, reply) => {
@@ -75,7 +89,8 @@ export function installErrorHandling(app: AnyApp): void {
         .status(status)
         .send({ error: { code: 'invalid_request', message: 'The request is not valid.' } });
     }
-    req.log.error({ err }, 'unhandled error');
+    // Never log the raw error: a Postgres error's detail can quote a whole row, personal data included.
+    req.log.error({ error: safeError(err) }, 'unhandled error');
     return reply.status(500).send({ error: { code: 'internal_error', message: 'Something went wrong.' } });
   });
   app.setNotFoundHandler((_req, reply) => reply.status(404).send(errors.notFound().toBody()));
