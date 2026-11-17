@@ -91,7 +91,7 @@ The `SaveCall` body is built from an allowlist of twelve fields (`integration.md
 One department, configured by environment (§13.1): Core base URL, API key, key expiry date, call type name, priority id. The key is never written to the database.
 
 ### 6.2 Intakes
-Intakes are defined in a JSON file named by `INTAKES_FILE` and validated at startup.
+Intakes are defined in a JSON file named by `INTAKES_FILE`, or inline in `INTAKES_JSON` (for Railway, which has no file to mount), and validated at startup.
 
 | Field | Notes |
 |---|---|
@@ -180,7 +180,7 @@ Response 201: `{ "deviceId": "dev_…", "deviceToken": "…", "expiresAt": "…"
 |---|---|
 | `Authorization: Bearer <deviceToken>` | Required. |
 | `Idempotency-Key` | Required. UUID. One per SOS, reused on every retry. |
-| `X-Attestation` | Fresh per attempt. Base64. Android: a standard Play Integrity token. iOS: an App Attest assertion. |
+| `X-Attestation` | Fresh per attempt. Android: a standard Play Integrity token, as issued. iOS: an App Attest assertion, base64. Exact encodings are in `docs/attestation-contract.md`. |
 
 **Attestation binding.** Let `h = SHA-256(Idempotency-Key + "\n" + raw request body bytes)`. The relay hashes the bytes as received, not re-serialised JSON.
 - **iOS:** the assertion's `clientDataHash` is the 32 bytes of `h`. The counter must be greater than the stored one.
@@ -463,7 +463,7 @@ Key indexes: unique `(device_id, idempotency_key)`; unique `reference`; partial 
 | `CLIENT_IP_HEADER` | Header holding the client address. Unset: use the socket address. On Railway: `x-real-ip`. |
 | `RESGRID_API_BASE`, `RESGRID_API_KEY`, `RESGRID_API_KEY_EXPIRES_ON` | Core |
 | `RESGRID_CALL_TYPE_NAME`, `RESGRID_PRIORITY_ID` | Call defaults |
-| `INTAKES_FILE` | Path to the intake definitions |
+| `INTAKES_FILE` or `INTAKES_JSON` | Path to the intake definitions, or the JSON itself |
 | `ATTESTATION_MODE`, `ALLOW_PERMISSIVE_IN_PRODUCTION` | §10.1 |
 | `ANDROID_PACKAGE_NAME`, `ANDROID_CERT_SHA256`, `GOOGLE_SERVICE_ACCOUNT_JSON` | Play Integrity |
 | `IOS_TEAM_ID`, `IOS_BUNDLE_ID`, `IOS_APP_ATTEST_ENV` | App Attest |

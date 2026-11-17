@@ -1,0 +1,30 @@
+[
+  {
+    "code": "EXAMPLE-FD-01",
+    "displayName": "Example Fire Department",
+    "emergencyPhone": "+15555550100",
+    "enabled": true,
+    "demo": false,
+    "natures": [
+      { "id": "medical", "label": "Medical emergency" },
+      { "id": "fire", "label": "Fire" },
+      { "id": "crime", "label": "Crime or violence" },
+      { "id": "road-accident", "label": "Road accident" },
+      { "id": "other", "label": "Other" }
+    ]
+  },
+  {
+    "code": "DEMO-INTAKE-01",
+    "displayName": "Demo Department",
+    "emergencyPhone": "+15555550101",
+    "enabled": true,
+    "demo": true,
+    "natures": [
+      { "id": "medical", "label": "Medical emergency" },
+      { "id": "fire", "label": "Fire" },
+      { "id": "crime", "label": "Crime or violence" },
+      { "id": "road-accident", "label": "Road accident" },
+      { "id": "other", "label": "Other" }
+    ]
+  }
+]

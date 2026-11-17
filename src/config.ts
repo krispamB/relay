@@ -35,7 +35,10 @@ export interface Config {
     callTypeName: string;
     priorityId: number;
   };
-  intakesFile: string;
+  /** Path to the intakes JSON file. One of intakesFile / intakesJson is set. */
+  intakesFile: string | undefined;
+  /** The intakes JSON inline, for platforms without a writable file system (Railway). */
+  intakesJson: string | undefined;
   attestation: {
     mode: AttestationMode;
     androidPackageName: string | undefined;
@@ -219,7 +222,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       callTypeName: req('RESGRID_CALL_TYPE_NAME'),
       priorityId,
     },
-    intakesFile: req('INTAKES_FILE'),
+    intakesFile: get('INTAKES_FILE'),
+    intakesJson: get('INTAKES_JSON'),
     attestation,
     statusTokenSecret: secret('STATUS_TOKEN_SECRET'),
     phoneHashSecret: secret('PHONE_HASH_SECRET'),
@@ -229,6 +233,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     demoCloseAfterS: int('DEMO_CLOSE_AFTER_S', 90, 1),
     limits,
   };
+  if (!config.intakesFile && !config.intakesJson) problems.push('INTAKES_FILE or INTAKES_JSON is required');
   if (config.port === config.adminPort) problems.push('PORT and ADMIN_PORT must differ');
   if (config.demoCloseAfterS <= config.demoDispatchAfterS) {
     problems.push('DEMO_CLOSE_AFTER_S must be greater than DEMO_DISPATCH_AFTER_S');

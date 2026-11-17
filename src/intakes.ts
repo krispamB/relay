@@ -97,3 +97,18 @@ export function loadIntakes(path: string): Intakes {
   }
   return parseIntakes(raw);
 }
+
+/** Loads intakes from INTAKES_JSON when set, else from INTAKES_FILE. */
+export function loadIntakesFromConfig(cfg: { intakesFile?: string; intakesJson?: string }): Intakes {
+  if (cfg.intakesJson) {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(cfg.intakesJson);
+    } catch (err) {
+      throw new IntakeConfigError(`INTAKES_JSON is not valid JSON: ${(err as Error).message}`);
+    }
+    return parseIntakes(raw);
+  }
+  if (cfg.intakesFile) return loadIntakes(cfg.intakesFile);
+  throw new IntakeConfigError('INTAKES_FILE or INTAKES_JSON is required');
+}

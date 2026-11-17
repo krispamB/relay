@@ -53,6 +53,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
       priorityId: 3,
     },
     intakesFile: '(test)',
+    intakesJson: undefined,
     attestation: {
       mode: 'permissive',
       androidPackageName: 'org.example.sos',
