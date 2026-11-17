@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { sql } from 'kysely';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MINUTE } from '../../src/clock.js';
 import { phoneHash, statusTokenFor } from '../../src/crypto.js';
 import { parseIntakes } from '../../src/intakes.js';
 import { METRICS } from '../../src/metrics.js';
+import { resetSosBudget, setSosBudget } from '../../src/sos/budget.js';
 import { pauseDelivery } from '../../src/state.js';
 import { eventsFor, getSubmission, ok, scriptedCore } from '../delivery/fixtures.js';
 import {
@@ -133,19 +135,128 @@ describe('responses (PRD §7.4, app PRD §7.1)', () => {
   });
 
   it.each([401, 403])(
-    '202 queued on Core %i: delivery pauses and the row is due as soon as it resumes',
+    '503 on Core %i: delivery pauses, the SOS is marked failed and nothing later contradicts the 503',
     async (s) => {
-      h = await harness({ core: scriptedCore({ kind: 'auth', httpStatus: s }) });
-      const res = await (await device(h)).send();
-      expect(res.status).toBe(202);
-      expect(res.body.status).toBe('queued');
-      const row = await getSubmission(h.ctx.db, res.body.receiptId);
-      expect(row.next_attempt_at).toEqual(h.ctx.clock.now());
+      const core = scriptedCore({ kind: 'auth', httpStatus: s }, ok());
+      h = await harness({ core });
+      const d = await device(h);
+      const key = randomUUID();
+      const res = await d.send({}, { key });
+      expect(res.status).toBe(503);
+      expect(res.body).toEqual({
+        error: {
+          code: 'unavailable',
+          message: 'This service cannot take an SOS right now.',
+          retryAfterSeconds: 60,
+        },
+      });
+      expect(res.headers['retry-after']).toBe('60');
       expect(
         (await h.ctx.db.selectFrom('relay_state').select('paused').executeTakeFirstOrThrow()).paused,
       ).toBe(true);
+      expect(h.ctx.alerts.codes()).toEqual(['delivery_paused']);
+      expect(h.metrics.count(METRICS.submissions, { outcome: 'not_sent' })).toBe(1);
+      expect(h.metrics.count(METRICS.submissions, { outcome: 'queued' })).toBe(0);
+
+      // The row: failed, never to be attempted again.
+      const rows = await h.ctx.db.selectFrom('submissions').selectAll().execute();
+      expect(rows).toHaveLength(1);
+      const row = rows[0]!;
+      expect(row).toMatchObject({ status: 'failed', next_attempt_at: null, attempts: 1 });
+      expect(row.failure_reason).toContain('not sent');
+      expect(await eventsFor(h.ctx.db, row.id)).toMatchObject([
+        { to_status: 'queued', cause: 'accepted' },
+        { from_status: 'queued', to_status: 'failed', cause: `not_sent_core_auth_${s}` },
+      ]);
+
+      // A replay with the same key: 201 failed, the app's "NOT DELIVERED, call now". No Core call.
+      const replay = await d.send({}, { key });
+      expect(replay.status).toBe(201);
+      expect(replay.body).toMatchObject({ receiptId: row.id, reference: row.reference, status: 'failed' });
+
+      // The status endpoint says failed too.
+      const status = await h.app.inject({
+        method: 'GET',
+        url: `/v1/sos/${row.id}/status`,
+        headers: { 'x-status-token': replay.body.statusToken },
+      });
+      expect(status.statusCode).toBe(200);
+      expect(status.json().status).toBe('failed');
+
+      // A new SOS from the device is not a 409 pointing at the refused one: it is refused while paused.
+      const next = await d.send();
+      expect(next.status).toBe(503);
+      expect(next.body.receiptId).toBeUndefined();
+
+      // Once resumed, a new SOS goes through, and the refused one is never sent.
+      await h.ctx.db.updateTable('relay_state').set({ paused: false }).where('id', '=', 1).execute();
+      const after = await d.send();
+      expect(after.status).toBe(201);
+      expect(after.body.status).toBe('received');
+      expect(core.calls.map((c) => c.submissionId)).toEqual([row.id, after.body.receiptId]);
     },
   );
+
+  describe('delivery paused by something else after the availability check', () => {
+    // Pauses delivery in the same transaction that saves the SOS, i.e. after step 10 passed.
+    async function pauseOnInsert(hh: Harness) {
+      await sql`CREATE OR REPLACE FUNCTION test_pause_on_insert() RETURNS trigger AS $$
+        BEGIN UPDATE relay_state SET paused = true, paused_reason = 'test' WHERE id = 1; RETURN NEW; END
+        $$ LANGUAGE plpgsql`.execute(hh.ctx.db);
+      await sql`CREATE TRIGGER test_pause_on_insert AFTER INSERT ON submissions
+        FOR EACH ROW EXECUTE FUNCTION test_pause_on_insert()`.execute(hh.ctx.db);
+    }
+    afterEach(async () => {
+      if (!h) return;
+      await sql`DROP TRIGGER IF EXISTS test_pause_on_insert ON submissions`.execute(h.ctx.db);
+      await sql`DROP FUNCTION IF EXISTS test_pause_on_insert()`.execute(h.ctx.db);
+      resetSosBudget();
+    });
+
+    it('503 with no Core call; the SOS is marked failed', async () => {
+      h = await harness({ core: unusedCore() });
+      await pauseOnInsert(h);
+      const d = await device(h);
+      const res = await d.send();
+      expect(res.status).toBe(503);
+      const row = await h.ctx.db.selectFrom('submissions').selectAll().executeTakeFirstOrThrow();
+      expect(row).toMatchObject({ status: 'failed', attempts: 0, next_attempt_at: null });
+      expect(await eventsFor(h.ctx.db, row.id)).toMatchObject([
+        { cause: 'accepted' },
+        { from_status: 'queued', to_status: 'failed', cause: 'not_sent_paused' },
+      ]);
+      expect(h.ctx.alerts.alerts).toEqual([]);
+    });
+
+    it('503 also when no time was left for an inline attempt', async () => {
+      h = await harness({ core: unusedCore() });
+      await pauseOnInsert(h);
+      setSosBudget({ minInlineMs: 60_000 });
+      const res = await (await device(h)).send();
+      expect(res.status).toBe(503);
+      const row = await h.ctx.db.selectFrom('submissions').selectAll().executeTakeFirstOrThrow();
+      expect(row.status).toBe('failed');
+    });
+
+    it('with no pause, no time left still answers 202 queued for the worker', async () => {
+      h = await harness({ core: unusedCore() });
+      setSosBudget({ minInlineMs: 60_000 });
+      const res = await (await device(h)).send();
+      expect(res.status).toBe(202);
+      const row = await getSubmission(h.ctx.db, res.body.receiptId);
+      expect(row.status).toBe('queued');
+      expect(row.next_attempt_at).toEqual(h.ctx.clock.now());
+    });
+  });
+
+  it('a demo SOS is still accepted and received while paused', async () => {
+    h = await harness({ core: unusedCore() });
+    const d = await device(h);
+    await pauseDelivery(h.ctx.db, h.ctx.clock.now(), 'test');
+    const res = await d.send({ intakeCode: DEMO_INTAKE_CODE, nature: 'medical' });
+    expect(res.status).toBe(201);
+    expect(res.body.status).toBe('received');
+  });
 
   it('the row is held past the inline attempt while Core is being called', async () => {
     let heldFor = 0;

@@ -29,6 +29,7 @@ export const ALERT_CODES = {
   unknownCallState: 'unknown_call_state',
   queueBacklog: 'queue_backlog',
   automaticBlock: 'automatic_block',
+  phoneHoaxThreshold: 'phone_hoax_threshold',
 } as const;
 
 export class NoopAlerter implements Alerter {

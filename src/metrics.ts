@@ -9,7 +9,7 @@ export interface Metrics {
 
 /** Every metric the relay emits. Labels must never carry personal data. */
 export const METRICS = {
-  /** counter {outcome: received|failed|queued|replay|conflict} */
+  /** counter {outcome: received|failed|queued|not_sent|replay|conflict} */
   submissions: 'sos_submissions_total',
   /** counter {endpoint, result: ok|auth|conflict|rejected|retryable} */
   coreCalls: 'sos_core_calls_total',

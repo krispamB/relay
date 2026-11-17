@@ -238,21 +238,33 @@ describe('saved but the response was lost', () => {
 });
 
 describe('Core refuses the API key (401)', () => {
-  it('pauses delivery, refuses new SOS, and resumes through the admin API', async () => {
+  it('answers 503, marks that SOS failed for good, refuses new SOS, and resumes through the admin API', async () => {
     const tokenA = await registerDevice();
     const tokenB = await registerDevice();
     mock.control.setApiKey(`rgk_AbCdEfGh_${'x'.repeat(43)}`);
 
-    const res = await sender(tokenA)();
-    expect(res.status).toBe(202);
-    expect(res.body.status).toBe('queued');
+    const sendA = sender(tokenA);
+    const res = await sendA();
+    expect(res.status).toBe(503);
+    expect(res.body.error).toMatchObject({ code: 'unavailable', retryAfterSeconds: 60 });
+    expect(res.body.receiptId).toBeUndefined();
     expect(mock.control.calls()).toHaveLength(0);
 
     const critical = ctxOf().alerts.alerts.filter((a) => a.code === ALERT_CODES.deliveryPaused);
     expect(critical).toHaveLength(1);
     expect(critical[0]!.severity).toBe('critical');
+    expect(ctxOf().alerts.codes()).not.toContain(ALERT_CODES.submissionFailed);
 
-    // A second device is refused, and the intake says so.
+    // A retry of the same SOS (same key and body) is a replay of a failed submission: not sent.
+    const replay = await sendA();
+    expect(replay.status).toBe(201);
+    expect(replay.body.status).toBe('failed');
+    expect((await getStatus(replay.body.receiptId, replay.body.statusToken)).body.status).toBe('failed');
+
+    // The refused SOS does not hold the device's one open SOS: a new one is refused for the pause,
+    // not with a 409 pointing at it. A second device is refused too, and the intake says so.
+    const againA = await postSos(appOf(), { token: tokenA, body: sosBody(ctxOf()) });
+    expect(againA.status).toBe(503);
     const second = await postSos(appOf(), { token: tokenB, body: sosBody(ctxOf()) });
     expect(second.status).toBe(503);
     expect((await getIntake()).body.available).toBe(false);
@@ -272,10 +284,44 @@ describe('Core refuses the API key (401)', () => {
     expect(resumed.body.paused).toBe(false);
     expect((await getIntake()).body.available).toBe(true);
 
+    // The SOS that was answered 503 never reaches Core, however long the worker runs.
     await passAfter(10);
+    await passAfter(60);
+    expect(mock.control.calls()).toHaveLength(0);
+    expect((await getStatus(replay.body.receiptId, replay.body.statusToken)).body.status).toBe('failed');
+
+    // The caller's next SOS goes through.
+    const fresh = await postSos(appOf(), { token: tokenA, body: sosBody(ctxOf()) });
+    expect(fresh.status).toBe(201);
+    expect(fresh.body.status).toBe('received');
     expect(mock.control.calls()).toHaveLength(1);
-    const status = await getStatus(res.body.receiptId, res.body.statusToken);
-    expect(status.body.status).toBe('received');
+    expect(mock.control.calls()[0]!.ExternalId).toBe(fresh.body.receiptId);
+  });
+
+  it('an SOS already answered 202 queued before the pause stays queued and is delivered after resume', async () => {
+    const tokenA = await registerDevice();
+    const tokenB = await registerDevice();
+
+    // A: Core is down, so A is answered 202 and left to the worker.
+    mock.control.injectFault('Calls/SaveCall', { status: 503 }, 1);
+    const a = await sender(tokenA)();
+    expect(a.status).toBe(202);
+    expect(a.body.status).toBe('queued');
+
+    // B: Core now refuses the key. B is answered 503; delivery pauses.
+    mock.control.setApiKey(`rgk_AbCdEfGh_${'x'.repeat(43)}`);
+    const b = await sender(tokenB)();
+    expect(b.status).toBe(503);
+
+    // A waits while paused.
+    await passAfter(60);
+    expect((await getStatus(a.body.receiptId, a.body.statusToken)).body.status).toBe('queued');
+
+    mock.control.setApiKey(DEFAULT_API_KEY);
+    expect((await adminPost('/admin/v1/delivery/resume')).status).toBe(200);
+    await passAfter(10);
+    expect((await getStatus(a.body.receiptId, a.body.statusToken)).body.status).toBe('received');
+    expect(mock.control.calls().map((c) => c.ExternalId)).toEqual([a.body.receiptId]);
   });
 });
 

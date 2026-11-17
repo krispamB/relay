@@ -1,0 +1,17 @@
+# GitGuardian / ggshield configuration.
+#
+# Two fake test strings in commit 1fa9e55 ("Add Core client, delivery worker, attestation
+# verifiers, ...") were reported as "Generic High Entropy Secret" on pull request #1
+# (incidents 40179256 and 40179257). Neither was ever a credential:
+#   - mock-core/server.test.ts: a made-up key for the in-repo mock Core.
+#   - test/attestation/playIntegrity.test.ts: a JWE-shaped string whose header decodes to
+#     {"alg":"A256KW","enc":"A256GCM"}, with "abc.def.ghi.jkl" as the other parts.
+# The current tree builds such strings at run time instead. The commit stays in history (it is
+# not rewritten), so those two exact values are ignored here, by SHA-256, and nothing else is.
+version: 2
+secret:
+  ignored_matches:
+    - name: fake mock-Core key in mock-core/server.test.ts (commit 1fa9e55)
+      match: dffb2350fee2ded77cb73739e8994d851e2cf2ff62e76f29dfa31de84fe14051
+    - name: fake JWE-shaped Play Integrity token in test/attestation/playIntegrity.test.ts (commit 1fa9e55)
+      match: 6d57fd5debd6352b3700006b445613d1c97a6bd58a3302527873042b0491d95c

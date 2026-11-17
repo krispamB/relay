@@ -90,10 +90,12 @@ const errorResponse = (description: string) => Type.Object({ error: ErrorObject 
 export const SosResponses = {
   201: Type.Object(receiptFields, {
     description:
-      'Core created the pending call (`received`), Core rejected it for good (`failed`), or a replay of an SOS that is no longer queued.',
+      'Core created the pending call (`received`), Core rejected it for good (`failed`), or a replay of an SOS that is no longer queued. ' +
+      'A replay of an SOS that was answered 503 after it was saved returns `failed`.',
   }),
   202: Type.Object(receiptFields, {
-    description: 'Saved; delivery is being retried (`queued`). Also a replay of an SOS still queued.',
+    description:
+      'Saved; delivery is being retried (`queued`) after a timeout, network error, 409, 429 or 5xx from Core. Also a replay of an SOS still queued.',
   }),
   400: errorResponse('Headers or body not valid. Do not retry.'),
   401: errorResponse('Device token missing, invalid or expired. Re-register, then retry with the same key.'),
@@ -105,5 +107,10 @@ export const SosResponses = {
   ),
   410: errorResponse('Intake disabled.'),
   429: errorResponse('Rate limited. `Retry-After` matches `retryAfterSeconds`.'),
-  503: errorResponse('Cannot take an SOS right now. `Retry-After` matches `retryAfterSeconds`.'),
+  503: errorResponse(
+    'Cannot take an SOS right now: delivery is paused or the relay cannot verify its Core configuration (code `unavailable`), ' +
+      'or the whole-intake breaker tripped (code `intake_busy`). Nothing will be delivered: the SOS was either not saved, or saved ' +
+      "and marked failed because Core refused the relay's API key during this request. Show the emergency phone number; do not " +
+      'auto-retry. `Retry-After` matches `retryAfterSeconds`.',
+  ),
 };

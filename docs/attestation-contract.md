@@ -34,8 +34,9 @@ Body:            {"intakeCode":"demo","nature":"fire","phone":"+15550100"}
 h (hex):         9f8748b95a13312d8a6aba78e9528fd33e543e4a148608067b8462a01aadfeb8
 ```
 
-A retry reuses the same `Idempotency-Key` and body, so it has the same `h`. It still needs a **fresh**
-attestation (see each platform below).
+A retry reuses the same `Idempotency-Key`. Its body may differ from the first attempt's (the app
+refreshes a location that is getting old; see `sos-app-PRD.md` §8), so compute `h` over the bytes of
+each attempt. Every attempt needs a **fresh** attestation (see each platform below).
 
 ## The four cases
 

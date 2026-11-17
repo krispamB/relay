@@ -17,7 +17,7 @@
  */
 
 import { sql } from 'kysely';
-import { type BlockChange, raiseBlockAlerts, recordHoaxStrikes, removeStrikes } from '../abuse/strikes.js';
+import { raiseStrikeAlerts, recordHoaxStrikes, removeStrikes, type StrikeOutcome } from '../abuse/strikes.js';
 import { ALERT_CODES } from '../alerts.js';
 import { addMs, HOUR, MINUTE, SECOND } from '../clock.js';
 import type { AppContext } from '../context.js';
@@ -439,9 +439,14 @@ async function pollOne(ctx: AppContext, pass: PassState, row: Row): Promise<void
 type Applied =
   | { kind: 'stale' }
   | { kind: 'unknown'; row: Row; state: number | undefined }
-  | { kind: 'same'; row: Row; blocks: BlockChange[] }
-  | { kind: 'transition'; row: Row; to: PolledStatus; blocks: BlockChange[] }
-  | { kind: 'suppressed'; row: Row; newer: { id: string; reference: string }; blocks: BlockChange[] };
+  | { kind: 'same'; row: Row; strikeOutcomes: StrikeOutcome[] }
+  | { kind: 'transition'; row: Row; to: PolledStatus; strikeOutcomes: StrikeOutcome[] }
+  | {
+      kind: 'suppressed';
+      row: Row;
+      newer: { id: string; reference: string };
+      strikeOutcomes: StrikeOutcome[];
+    };
 
 async function applyCallState(ctx: AppContext, claimed: Row, result: CallStateResult): Promise<void> {
   const applied = await ctx.db.transaction().execute(async (trx): Promise<Applied> => {
@@ -467,9 +472,9 @@ async function applyCallState(ctx: AppContext, claimed: Row, result: CallStateRe
 
     // PRD §9.2: strikes follow the Core state. A not_found (deleted call) says nothing about whether
     // it was a hoax, so it leaves strikes as they are.
-    let blocks: BlockChange[] = [];
-    if (result.hoax) blocks = await recordHoaxStrikes(trx, row, now, ctx.config.limits);
-    else if (!result.notFound) blocks = await removeStrikes(trx, row, now, ctx.config.limits);
+    let strikeOutcomes: StrikeOutcome[] = [];
+    if (result.hoax) strikeOutcomes = await recordHoaxStrikes(trx, row, now, ctx.config.limits);
+    else if (!result.notFound) strikeOutcomes = await removeStrikes(trx, row, now, ctx.config.limits);
 
     const coreState = result.notFound ? null : (result.state ?? null);
     const to = result.status;
@@ -481,7 +486,7 @@ async function applyCallState(ctx: AppContext, claimed: Row, result: CallStateRe
           .where('id', '=', row.id)
           .execute();
       }
-      return { kind: 'same', row, blocks };
+      return { kind: 'same', row, strikeOutcomes };
     }
 
     // A re-open while the device already has a newer open SOS: the one-open-per-device rule holds,
@@ -514,7 +519,7 @@ async function applyCallState(ctx: AppContext, claimed: Row, result: CallStateRe
             })
             .execute();
         }
-        return { kind: 'suppressed', row, newer, blocks };
+        return { kind: 'suppressed', row, newer, strikeOutcomes };
       }
     }
 
@@ -530,7 +535,7 @@ async function applyCallState(ctx: AppContext, claimed: Row, result: CallStateRe
         next_poll_at: addMs(now, pollIntervalMs(to)),
       },
     );
-    return { kind: 'transition', row, to, blocks };
+    return { kind: 'transition', row, to, strikeOutcomes };
   });
 
   switch (applied.kind) {
@@ -570,5 +575,5 @@ async function applyCallState(ctx: AppContext, claimed: Row, result: CallStateRe
       );
       break;
   }
-  await raiseBlockAlerts(ctx, applied.blocks);
+  await raiseStrikeAlerts(ctx, applied.strikeOutcomes);
 }

@@ -16,7 +16,7 @@ import { clientIp, type PublicApp } from '../app.js';
 import type { AppContext } from '../context.js';
 import { bindingHash, phoneHash } from '../crypto.js';
 import type { Device, Submission, SubmissionStatus } from '../db/types.js';
-import { attemptDelivery, type DeliveryOutcome } from '../delivery/deliver.js';
+import { attemptDelivery, type DeliveryOutcome, failIfPausedInline } from '../delivery/deliver.js';
 import { requireDevice } from '../devices/auth.js';
 import { ApiError, errors } from '../errors.js';
 import { METRICS } from '../metrics.js';
@@ -75,7 +75,10 @@ export async function sosRoutes(app: PublicApp, ctx: AppContext): Promise<void> 
         description:
           'Order of checks: device token (401), device block (403), headers and body (400), attestation (403), ' +
           'intake (404/410), replay of the same Idempotency-Key (201/202), open SOS (409), phone block (403), ' +
-          'rate limits (429, or 503 for the whole-intake breaker), availability (503), then persist and deliver.',
+          'rate limits (429, or 503 for the whole-intake breaker), availability (503), then persist and deliver. ' +
+          "A 503 can also come after the SOS was saved, when Core refuses the relay's API key or delivery is paused " +
+          'before the inline attempt: the SOS is then marked failed, will never be delivered, and a replay of the same ' +
+          'Idempotency-Key returns 201 `failed`.',
         tags: ['sos'],
         security: [{ deviceToken: [] }],
         headers: SosHeaders,
@@ -265,7 +268,7 @@ export async function sosRoutes(app: PublicApp, ctx: AppContext): Promise<void> 
     let outcome: DeliveryOutcome | 'not_attempted' = 'not_attempted';
     if (timeoutMs !== undefined) {
       try {
-        outcome = await attemptDelivery(ctx, row.id, { timeoutMs });
+        outcome = await attemptDelivery(ctx, row.id, { timeoutMs, inline: true });
       } catch (err) {
         // The row is committed as queued; whatever happened, the worker retries it with the same
         // Idempotency-Key, so Core cannot create a second call.
@@ -273,12 +276,21 @@ export async function sosRoutes(app: PublicApp, ctx: AppContext): Promise<void> 
       }
     } else {
       req.log.warn(ids, 'no time left for an inline attempt; left to the worker');
+      try {
+        // A 202 must not promise delivery while nothing can move: see failIfPausedInline.
+        if (await failIfPausedInline(ctx, row.id)) outcome = 'not_sent';
+      } catch (err) {
+        req.log.error({ ...ids, ...safeErr(err) }, 'could not check the pause; answering queued');
+      }
     }
 
     switch (outcome) {
       case 'received':
       case 'failed':
         return reply.code(201).send(receiptFor(secret, row, outcome));
+      case 'not_sent':
+        // Saved, but marked failed and never delivered: the caller must phone (PRD §8.1).
+        throw errors.unavailable(UNAVAILABLE_RETRY_AFTER_S);
       case 'skipped': {
         // Someone else holds or already finished it: answer from what is stored now.
         let status: SubmissionStatus = 'queued';

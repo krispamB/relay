@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { ALERT_CODES } from '../../src/alerts.js';
 import { MINUTE } from '../../src/clock.js';
-import { attemptDelivery } from '../../src/delivery/deliver.js';
+import { attemptDelivery, failIfPausedInline } from '../../src/delivery/deliver.js';
 import { PLACEHOLDER_ADDRESS, PLACEHOLDER_NAME } from '../../src/delivery/mapping.js';
 import { getState, pauseDelivery } from '../../src/state.js';
 import { closeTestDb, createTestContext, resetDb, unusedCore } from '../helpers/context.js';
@@ -125,6 +125,66 @@ describe('attemptDelivery outcomes (PRD §8.1)', () => {
     await pauseDelivery(ctx.db, ctx.clock.now(), 'test');
     expect(await attemptDelivery(ctx, id)).toBe('queued');
     expect((await getSubmission(ctx.db, id)).attempts).toBe(0);
+  });
+
+  describe('the inline attempt when delivery cannot move (PRD §8.1: answered 503)', () => {
+    it.each([401, 403])(
+      '%i auth → not_sent: marked failed for good, pauses, only the pause alert',
+      async (status) => {
+        const { ctx, core } = setup(scriptedCore({ kind: 'auth', httpStatus: status }));
+        const id = await insertSubmission(ctx.db, ctx.clock.now());
+        expect(await attemptDelivery(ctx, id, { inline: true })).toBe('not_sent');
+
+        const row = await getSubmission(ctx.db, id);
+        expect(row).toMatchObject({ status: 'failed', attempts: 1, next_attempt_at: null });
+        expect(row.failure_reason).toContain('not sent');
+        expect(row.failure_reason).toContain(String(status));
+        expect(await eventsFor(ctx.db, id)).toMatchObject([
+          { from_status: 'queued', to_status: 'failed', cause: `not_sent_core_auth_${status}` },
+        ]);
+        const state = await getState(ctx.db);
+        expect(state.paused).toBe(true);
+        expect(state.paused_reason).toContain(String(status));
+        expect(ctx.alerts.alerts).toMatchObject([{ severity: 'critical', code: ALERT_CODES.deliveryPaused }]);
+
+        // Resuming later never sends it: it is no longer queued.
+        ctx.core = scriptedCore(ok());
+        await ctx.db.updateTable('relay_state').set({ paused: false }).where('id', '=', 1).execute();
+        expect(await attemptDelivery(ctx, id)).toBe('skipped');
+        expect(core.calls).toHaveLength(1);
+      },
+    );
+
+    it('paused before the attempt → not_sent, no Core call, no alert of its own', async () => {
+      const ctx = createTestContext({ core: unusedCore() });
+      const id = await insertSubmission(ctx.db, ctx.clock.now());
+      await pauseDelivery(ctx.db, ctx.clock.now(), 'test');
+      expect(await attemptDelivery(ctx, id, { inline: true })).toBe('not_sent');
+      const row = await getSubmission(ctx.db, id);
+      expect(row).toMatchObject({ status: 'failed', attempts: 0, next_attempt_at: null });
+      expect(await eventsFor(ctx.db, id)).toMatchObject([
+        { from_status: 'queued', to_status: 'failed', cause: 'not_sent_paused' },
+      ]);
+      expect(ctx.alerts.alerts).toEqual([]);
+    });
+
+    it('failIfPausedInline marks a queued submission failed only while paused', async () => {
+      const ctx = createTestContext({ core: unusedCore() });
+      const id = await insertSubmission(ctx.db, ctx.clock.now());
+      expect(await failIfPausedInline(ctx, id)).toBe(false);
+      expect((await getSubmission(ctx.db, id)).status).toBe('queued');
+      await pauseDelivery(ctx.db, ctx.clock.now(), 'test');
+      expect(await failIfPausedInline(ctx, id)).toBe(true);
+      expect((await getSubmission(ctx.db, id)).status).toBe('failed');
+      expect(await failIfPausedInline(ctx, id)).toBe(false);
+    });
+
+    it('a retryable result inline still stays queued (202)', async () => {
+      const { ctx } = setup(scriptedCore(retryable()));
+      const id = await insertSubmission(ctx.db, ctx.clock.now());
+      expect(await attemptDelivery(ctx, id, { inline: true })).toBe('queued');
+      expect((await getSubmission(ctx.db, id)).status).toBe('queued');
+    });
   });
 
   const retryCases: [string, SaveResult][] = [

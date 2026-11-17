@@ -6,6 +6,7 @@ The relay is the only server the public SOS mobile app talks to. It checks that 
 |---|---|
 | [`sos-relay-PRD.md`](sos-relay-PRD.md) | What the relay does, the public API, delivery rules, limits, deployment, acceptance criteria, open risks. The source of truth for behaviour. |
 | [`integration.md`](integration.md) | The contract with Resgrid Core: endpoints, auth, errors, the Core-side setup (section 10) and the live test checklist (section 11). Wins over the PRD on anything about Core. |
+| [`docs/app-api-contract.md`](docs/app-api-contract.md) | **For the app team:** every endpoint the app uses, what to send, every answer and what to do with it, retries, limits. The OpenAPI document is [`docs/openapi.json`](docs/openapi.json) (served at `/v1/openapi.json`; regenerate with `npm run openapi`). |
 | [`docs/attestation-contract.md`](docs/attestation-contract.md) | What the app must send so the relay can verify an install (Play Integrity, App Attest). |
 
 Also: [`sos-app-PRD.md`](sos-app-PRD.md) (the app), [`mock-core/README.md`](mock-core/README.md) (the mock Core and its `/__control` endpoints), [`.env.example`](.env.example) (every setting).
@@ -94,6 +95,7 @@ npm run lint             # biome check .
 npm run format           # biome check --write .
 npm test                 # vitest run
 npm run mock-core        # mock Core on :4010 (PORT, MOCK_CORE_API_KEY override)
+npm run openapi          # regenerate docs/openapi.json after changing a route schema (a test fails if it is stale)
 npm run migrate:dev      # apply migrations to DATABASE_URL
 npm run dev              # relay with file watching (reads the environment; see .env.example)
 npm run build && npm start   # compiled build, as in the Docker image
@@ -201,7 +203,7 @@ One outbound webhook (`ALERT_WEBHOOK_URL`); body `{severity, code, text, referen
 
 | Code | Severity | Meaning | What to do |
 |---|---|---|---|
-| `delivery_paused` | critical | Core answered 401 or 403 to `SaveCall` (or an operator paused). No Core calls are made, new SOS get 503, queued SOS wait and fail at 30 minutes. Repeats every 15 minutes while paused. | Find out why Core refuses the key: expired, revoked, wrong environment, relay egress IP not in the key's allowlist, or the key lacks `calls.create` (403). Fix the key (a new key means updating `RESGRID_API_KEY` and redeploying). **Then** `POST /admin/v1/delivery/resume`. Do not resume before the key is fixed: repeated unrecognised keys can trip Core's lockout. |
+| `delivery_paused` | critical | Core answered 401 or 403 to `SaveCall` (or an operator paused). No Core calls are made and new SOS get 503. If the 401/403 came during a caller's own request, that caller was answered 503 too and the SOS was marked `failed` (never delivered, even after resume; `GET /admin/v1/submissions/<reference>` shows `failure_reason: not sent: ...`). SOS already answered 202 `queued` wait, and fail at 30 minutes unless delivery resumes first. Repeats every 15 minutes while paused. | Find out why Core refuses the key: expired, revoked, wrong environment, relay egress IP not in the key's allowlist, or the key lacks `calls.create` (403). Fix the key (a new key means updating `RESGRID_API_KEY` and redeploying). **Then** `POST /admin/v1/delivery/resume`. Do not resume before the key is fixed: repeated unrecognised keys can trip Core's lockout. |
 | `field_policy_unmeetable` | critical | Core's field policy requires `what3words`, `incidentId` or `destinationPoi`. The intake is unavailable. | Change the field policy in Resgrid. The next hourly check clears it. |
 | `core_reference_mismatch` | critical | The configured call type name or priority id was not found in Core. The intake is unavailable. | Fix `RESGRID_CALL_TYPE_NAME` / `RESGRID_PRIORITY_ID` or the data in Resgrid. |
 | `intake_breaker_tripped` | critical | More than 30 SOS in 10 minutes (defaults): the whole intake refuses with 503. | Check for a flood or a hoax campaign; see the blocks API. It clears as the window passes. |
@@ -210,7 +212,8 @@ One outbound webhook (`ALERT_WEBHOOK_URL`); body `{severity, code, text, referen
 | `resgrid_key_expiring` | warning | The key expires within 30 days, and again within 7. | Issue a new key, update the variable and the expiry date, redeploy. |
 | `unknown_call_state` | warning | Core returned a call `State` the relay does not know; the status is left unchanged. | Check which state it is; it may need adding to the mapping. |
 | `queue_backlog` | warning | Queue depth or oldest queued age is over the threshold (`QUEUE_DEPTH_WARN`, `OLDEST_QUEUED_WARN_S`). | Check Core health; see `delivery_paused`. |
-| `automatic_block` | warning | A device or phone number was blocked after repeated unfounded or false-alarm closures. | Review it; unblock through the blocks API if it was a real caller (PRD risk R5). |
+| `automatic_block` | warning | A device was blocked after repeated unfounded or false-alarm closures, or such a block was lifted because a closure was reversed in Core. | Review it; unblock through the blocks API if it was a real caller (PRD risk R5). |
+| `phone_hoax_threshold` | warning | A phone number reached `HOAX_STRIKES_TO_BLOCK` unfounded or false-alarm closures. It was **not** blocked: phone numbers are unverified, so a hoaxer could give a stranger's number. The alert names the SOS reference, never the number. | Look the reference up in Resgrid, review the calls, and block the number through the blocks API (`{"phone": "+..."}`) only if you judge it warranted (PRD section 9.2). |
 
 ### Metrics
 
@@ -239,8 +242,8 @@ From [PRD section 17](sos-relay-PRD.md#17-risks-and-open-items):
 - **R2 Not run against a real Core.** Everything passes against the mock, which was written from `integration.md`, not from a real instance. Where the two differ, Core wins.
 - **R3 Core text length limits are unknown.** The live checklist measures them.
 - **R4 Deleted calls.** What `GetCall` returns for a deleted call is unverified. The relay maps both plausible answers to a sensible status.
-- **R5 Automatic blocks can lock out a real caller.** Two unfounded closures block a device or phone for 30 days; tune `HOAX_STRIKES_TO_BLOCK` (0 = alert only) and review during the pilot.
+- **R5 Automatic device blocks can lock out a real caller.** Two unfounded closures block a device for 30 days; tune `HOAX_STRIKES_TO_BLOCK` (0 = no automatic blocks and no strike alerts) and review during the pilot. Phone numbers are never blocked automatically.
 - **R6 24-hour forced close.** A call still active after 24 hours shows as closed in the app.
-- **R7 Phone numbers are unverified.** The per-phone limit and phone blocks can be dodged by typing another number; device limits rest on attestation.
+- **R7 Phone numbers are unverified.** The per-phone limit and manual phone blocks can be dodged by typing another number, and a hoaxer can give a stranger's number, so phone strikes only alert (`phone_hoax_threshold`); device limits rest on attestation.
 - **R8 Shared static egress IP.** See Railway step 5.
 - **R9 Single department.** A second department needs a schema migration and per-department config.

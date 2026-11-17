@@ -10,7 +10,15 @@ import {
   normaliseCertDigest,
   type VerdictBinding,
 } from '../../src/attestation/playIntegrity.js';
-import { CERT_B64URL, CERT_BYTES, CERT_COLON_HEX, NOW, PACKAGE, verdict } from './playFixtures.js';
+import {
+  CERT_B64URL,
+  CERT_BYTES,
+  CERT_COLON_HEX,
+  fakeJweToken,
+  NOW,
+  PACKAGE,
+  verdict,
+} from './playFixtures.js';
 
 const H = createHash('sha256').update('idem\n{"a":1}').digest();
 
@@ -275,7 +283,7 @@ describe('standard verdict (each SOS)', () => {
 
 describe('token shape', () => {
   it('accepts JWE-looking strings and refuses other things', () => {
-    expect(isPlausibleToken('eyJhbGciOiJBMjU2S1ciLCJlbmMiOiJBMjU2R0NNIn0.abc.def.ghi.jkl')).toBe(true);
+    expect(isPlausibleToken(fakeJweToken('abc', 'def', 'ghi', 'jkl'))).toBe(true);
     for (const bad of [
       undefined,
       1,

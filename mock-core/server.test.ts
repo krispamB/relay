@@ -96,11 +96,13 @@ describe('authentication', () => {
   });
 
   it('accepts a changed key and refuses the old one', async () => {
-    mock.control.setApiKey('rgk_NewKey00_new');
+    // Built at run time, like DEFAULT_API_KEY: no key-shaped literal in the source.
+    const newKey = `rgk_NewKey00_${'n'.repeat(43)}`;
+    mock.control.setApiKey(newKey);
     expect((await api('Calls/GetPendingCalls')).status).toBe(401);
-    expect(
-      (await api('Calls/GetPendingCalls', { headers: { 'X-Resgrid-ApiKey': 'rgk_NewKey00_new' } })).status,
-    ).toBe(200);
+    expect((await api('Calls/GetPendingCalls', { headers: { 'X-Resgrid-ApiKey': newKey } })).status).toBe(
+      200,
+    );
   });
 });
 

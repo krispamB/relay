@@ -9,6 +9,16 @@ export const CERT_COLON_HEX = [...CERT_BYTES]
   .join(':');
 export const CERT_B64URL = CERT_BYTES.toString('base64url');
 
+/**
+ * A string shaped like a Play Integrity token (a JWE in compact form: five dot-separated parts),
+ * built at run time so no token-shaped literal sits in the source for secret scanners to flag.
+ * It carries no key material and decrypts to nothing.
+ */
+export function fakeJweToken(...parts: string[]): string {
+  const header = Buffer.from(JSON.stringify({ alg: 'A256KW', enc: 'A256GCM' })).toString('base64url');
+  return [header, ...parts].join('.');
+}
+
 export function verdict(
   over: {
     requestDetails?: Record<string, unknown>;

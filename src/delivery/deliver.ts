@@ -20,11 +20,29 @@ export const HARD_STOP_MS = 30 * MINUTE;
 /** First status poll after Core accepted the call (PRD §8.5). */
 export const FIRST_POLL_DELAY_MS = 15 * SECOND;
 
-export type DeliveryOutcome = 'received' | 'failed' | 'queued' | 'skipped';
+/**
+ * `not_sent` is for the inline attempt only (AttemptOptions.inline): the submission could not move
+ * because delivery is paused, and has been marked failed so that the 503 the caller gets stays true.
+ */
+export type DeliveryOutcome = 'received' | 'failed' | 'queued' | 'skipped' | 'not_sent';
+
+/** Event causes for a submission that was saved but answered 503 (PRD §8.1). */
+export const NOT_SENT_CAUSES = {
+  paused: 'not_sent_paused',
+  coreAuth: (httpStatus: number) => `not_sent_core_auth_${httpStatus}`,
+} as const;
 
 export interface AttemptOptions {
   /** Budget for the SaveCall request. Defaults to the client's 6 s. */
   timeoutMs?: number;
+  /**
+   * The inline attempt of `POST /v1/sos` (PRD §8.1). When delivery is paused before the attempt, or
+   * Core answers 401/403 to it, the caller is about to be told 503 ("not sent, call instead"), so the
+   * submission is marked `failed` rather than left queued: it must not reach dispatch later when an
+   * operator resumes, nor hold the device's one open SOS. Without this flag (the worker) such a
+   * submission stays queued, as before.
+   */
+  inline?: boolean;
   /**
    * Worker use: skip the row unless next_attempt_at is due at claim time, so a row another
    * instance just retried is not attempted again before its backoff.
@@ -74,6 +92,63 @@ export async function failExpiredInTrx(trx: Db, row: Submission, now: Date): Pro
     .execute();
 }
 
+/**
+ * Marks a claimed queued row failed because it was not sent and the caller is answered 503 (inside
+ * the claiming transaction). See AttemptOptions.inline.
+ */
+async function failNotSentInTrx(
+  trx: Db,
+  row: Submission,
+  now: Date,
+  cause: string,
+  reason: string,
+  extra: SubmissionUpdate = {},
+): Promise<void> {
+  await transition(trx, row, 'failed', cause, now, {
+    ...extra,
+    failure_reason: `not sent: ${reason}; the caller was answered 503`,
+    next_attempt_at: null,
+  });
+}
+
+/**
+ * For an inline attempt that never started (no time left in the request budget): if delivery is
+ * paused, marks the submission failed as not sent, as attemptDelivery does with `inline`, and
+ * returns true so the route answers 503. Otherwise leaves it queued for the worker.
+ */
+export async function failIfPausedInline(ctx: AppContext, submissionId: string): Promise<boolean> {
+  const failed = await ctx.db.transaction().execute(async (trx): Promise<Submission | undefined> => {
+    const row = await trx
+      .selectFrom('submissions')
+      .selectAll()
+      .where('id', '=', submissionId)
+      .forUpdate()
+      .skipLocked()
+      .executeTakeFirst();
+    if (row?.status !== 'queued' || row.is_demo) return undefined;
+    const state = await trx
+      .selectFrom('relay_state')
+      .select('paused')
+      .where('id', '=', 1)
+      .executeTakeFirstOrThrow();
+    if (!state.paused) return undefined;
+    await failNotSentInTrx(trx, row, ctx.clock.now(), NOT_SENT_CAUSES.paused, 'delivery is paused');
+    return row;
+  });
+  if (!failed) return false;
+  reportNotSent(ctx, failed, 'delivery is paused');
+  return true;
+}
+
+/** Log and metric for a submission answered 503 after it was saved. No alert: the pause has its own. */
+function reportNotSent(ctx: AppContext, row: Submission, why: string): void {
+  ctx.log.warn(
+    { receiptId: row.id, reference: row.reference },
+    `SOS not sent (${why}); marked failed and answered 503`,
+  );
+  ctx.metrics.inc(METRICS.submissions, { outcome: 'not_sent' });
+}
+
 /** Alert and metric for a submission that hit the hard stop. Called after commit. */
 export async function reportExpired(ctx: AppContext, row: Submission): Promise<void> {
   ctx.log.error(
@@ -96,6 +171,7 @@ export async function reportExpired(ctx: AppContext, row: Submission): Promise<v
 type Decision =
   | { kind: 'skipped' }
   | { kind: 'paused' }
+  | { kind: 'not_sent_paused'; row: Submission }
   | { kind: 'expired'; row: Submission }
   | { kind: 'demo'; row: Submission }
   | { kind: 'core'; row: Submission; result: CoreResult<{ callId: string }>; now: Date };
@@ -142,7 +218,11 @@ export async function attemptDelivery(
       .select(['paused', 'required_address', 'required_name'])
       .where('id', '=', 1)
       .executeTakeFirstOrThrow();
-    if (state.paused) return { kind: 'paused' };
+    if (state.paused) {
+      if (!opts.inline) return { kind: 'paused' };
+      await failNotSentInTrx(trx, row, claimedAt, NOT_SENT_CAUSES.paused, 'delivery is paused');
+      return { kind: 'not_sent_paused', row };
+    }
 
     const input = buildSaveCallInput(row, ctx.config.resgrid, {
       requiredAddress: state.required_address,
@@ -185,7 +265,19 @@ export async function attemptDelivery(
         });
         break;
       case 'auth':
-        // Stays queued; the pause stops further attempts until an operator resumes.
+        if (opts.inline) {
+          // Core created nothing. The caller is told 503 and phones; see AttemptOptions.inline.
+          await failNotSentInTrx(
+            trx,
+            row,
+            now,
+            NOT_SENT_CAUSES.coreAuth(result.httpStatus),
+            `Core returned ${result.httpStatus} on SaveCall and delivery was paused`,
+            { attempts },
+          );
+          break;
+        }
+        // Worker: stays queued; the pause stops further attempts until an operator resumes.
         await trx
           .updateTable('submissions')
           .set({ attempts, updated_at: now })
@@ -217,6 +309,9 @@ export async function attemptDelivery(
       return 'skipped';
     case 'paused':
       return 'queued';
+    case 'not_sent_paused':
+      reportNotSent(ctx, decision.row, 'delivery is paused');
+      return 'not_sent';
     case 'expired':
       await reportExpired(ctx, decision.row);
       return 'failed';
@@ -227,7 +322,7 @@ export async function attemptDelivery(
       );
       return 'received';
     case 'core':
-      return afterCore(ctx, decision.row, decision.result, decision.now);
+      return afterCore(ctx, decision.row, decision.result, decision.now, opts.inline === true);
   }
 }
 
@@ -236,6 +331,7 @@ async function afterCore(
   row: Submission,
   result: CoreResult<{ callId: string }>,
   now: Date,
+  inline: boolean,
 ): Promise<DeliveryOutcome> {
   const ids = { receiptId: row.id, reference: row.reference };
   switch (result.kind) {
@@ -273,7 +369,9 @@ async function afterCore(
           message: `SOS delivery paused: Core returned ${result.httpStatus} on SaveCall`,
         });
       }
-      return 'queued';
+      if (!inline) return 'queued';
+      reportNotSent(ctx, row, `Core returned ${result.httpStatus}`);
+      return 'not_sent';
     }
     case 'conflict':
     case 'retryable':

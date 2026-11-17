@@ -8,6 +8,7 @@
 | **Serves** | The public SOS mobile app (`sos-app-PRD.md`) |
 | **Talks to** | Resgrid Core (Sentinel) v4 REST API (`integration.md`) |
 | **Precedence** | For anything about Core, `integration.md` wins over this document. For the public `/v1` API, this document wins over `sos-app-PRD.md` (see §16). |
+| **App contract** | The app team works from `docs/app-api-contract.md` (every public endpoint, request, response and expected app behaviour) and `docs/openapi.json`. Both are derived from this document and the code. |
 
 Section numbers are kept compatible with the references in `sos-app-PRD.md` and `integration.md` (§5 Core, §6 department, §7.2 to §7.5 public API, §8 delivery, §10.2 pinning, §10.5 retention, §13.2 startup checks).
 
@@ -225,6 +226,9 @@ Response 201: `{ "deviceId": "dev_…", "deviceToken": "…", "expiresAt": "…"
 | 202 | `queued` | Saved; delivery is being retried. |
 | 201 / 202 | any | Replay of an earlier request with the same key: the current state. 202 if still `queued`, otherwise 201. |
 | 409 | – | An SOS from this device is already open. |
+| 503 | – | Not sent. Usually refused at step 9 or 10 before anything is saved; also after step 11 when Core refuses the API key, or delivery was paused, before the inline attempt could send it (§8.1). |
+
+A 503 always means the SOS will not be delivered. When it comes after step 11, the saved submission is `failed`, so a replay with the same key returns 201 `failed`.
 
 Success and replay body:
 ```json
@@ -257,15 +261,20 @@ Header `X-Status-Token`. No device token needed.
 
 ### 8.1 Flow
 1. **Persist.** The row is committed as `queued` before any Core call.
-2. **Inline attempt.** One `SaveCall`. The request has a 7.5-second total budget; the inline attempt is given what remains of it, at most 6 s. If the budget runs out, the response is `202 queued` and the worker takes over.
+2. **Inline attempt.** One `SaveCall`. The request has a 7.5-second total budget; the inline attempt is given what remains of it, at most 6 s. If the budget runs out, the response is `202 queued` and the worker takes over, unless delivery is paused by then (below).
 3. **Outcome:**
 
 | Core result | Submission | Response |
 |---|---|---|
 | 201 / 200 with `Id` | `received`, call id stored | 201 `received` |
 | 400 or another unlisted 4xx | `failed`, high alert | 201 `failed` |
-| 401 / 403 | stays `queued`; delivery pauses (§8.4) | 202 `queued` |
+| 401 / 403 | `failed` (not sent); delivery pauses (§8.4) | 503 |
+| No call made: delivery was paused after step 10 | `failed` (not sent) | 503 |
 | 409, 429, 5xx, timeout, network error | stays `queued` | 202 `queued` |
+
+**Why `failed` and not `queued` on a 503.** The caller is told the SOS was not sent and will phone instead. Left `queued`, it could reach dispatch when an operator resumes, perhaps twenty minutes later, as a second, stale report of the same emergency, and it would hold the device's one open SOS, so the caller's next attempt would get a 409 pointing at it. As `failed` (reason `not sent: …`, event cause `not_sent_paused` or `not_sent_core_auth_<status>`), every later answer agrees with the 503: a replay with the same key returns 201 `failed`, the status endpoint reads `failed`, the device has no open SOS, and the admin view shows `failed` with the reason. It raises no `submission_failed` alert; the pause alert (§8.4) covers the event. It counts toward the SOS limits like any other saved submission (§9.1).
+
+Only the inline attempt does this. A submission already answered `202 queued` before the pause stays queued, and the worker leaves it queued on a 401 or 403 (§8.4).
 
 4. **Worker.** Retries `queued` submissions one at a time, oldest first.
 5. **Hard stop.** 30 minutes after acceptance a `queued` submission becomes `failed`, with a high alert. A late SOS with a stale location is worse than a clear failure.
@@ -304,7 +313,7 @@ Lines with no data are left out.
 
 ### 8.4 Pause
 - **Trigger:** a 401 or 403 from `SaveCall`. For a 401 from a read, the relay first calls `GetNewCallFieldPolicy`; it pauses only if that is also 401 (`integration.md` §5.1).
-- **While paused:** no Core calls of any kind. New SOS get 503. Queued submissions stay queued and fail at their normal 30-minute mark.
+- **While paused:** no Core calls of any kind. New SOS get 503. Queued submissions (already answered 202) stay queued and fail at their normal 30-minute mark, or are delivered if delivery resumes before it. The SOS whose inline attempt got the 401 or 403 is answered 503 and marked `failed` at once (§8.1).
 - **State** is a row in Postgres, so it survives restarts.
 - **Alert:** critical, at once, and again every 15 minutes until resumed.
 - **Resume:** only by the admin API. Resume first calls `GetNewCallFieldPolicy`; if that fails with 401 or 403 the relay stays paused and says so.
@@ -339,19 +348,21 @@ Defaults; all are configuration.
 | Status polls per receipt | 1 per 5 s | 429 |
 | Any request, per IP address | 120 per minute | 429 |
 
-- SOS limits count **accepted** submissions in the window, read from the `submissions` table. Refused requests and replays do not count.
+- SOS limits count **accepted** submissions in the window, read from the `submissions` table. Refused requests and replays do not count. A submission saved and then answered 503 (§8.1) was accepted, and counts.
 - The open-SOS check (409) runs before the limits.
 - The last two limits are held in memory per instance; they only protect the relay itself.
 - Demo submissions are counted separately.
 
 ### 9.2 Strikes and blocks
-- **Strike:** one for the device and one for the phone number each time a call is closed as Unfounded or False alarm. Strikes last 30 days.
-- **Automatic block:** `HOAX_STRIKES_TO_BLOCK` (default 2) live strikes block that device or phone number for 30 days. Set it to 0 for alert-only. Every automatic block raises a warning alert.
-- **Manual block and unblock** through the admin API.
+- **Strike:** one for the device and one for the phone number each time a call is closed as Unfounded or False alarm. Strikes last 30 days. A later re-open, or a re-close with another state, removes that call's strikes.
+- **Device: automatic block.** `HOAX_STRIKES_TO_BLOCK` (default 2) live strikes block that device for 30 days, with a warning alert (`automatic_block`) naming the device id. When a strike is removed and the device falls below the threshold, the automatic blocks created since that strike are lifted, with the same alert.
+- **Phone number: alert only, never blocked automatically.** The number is typed by the caller and unverified, so anyone with a few attested devices could otherwise get a stranger's number blocked. When a new strike takes a phone number to `HOAX_STRIKES_TO_BLOCK` live strikes or more, and the number has no live block, the relay raises a warning alert (`phone_hoax_threshold`) carrying the reference and receipt id of the submission that tipped it over, and blocks nothing. The alert never contains the number or its hash; the reference finds the call in Resgrid, where an operator can see the number and decide whether to block it by hand. The alert is raised only when a strike is newly recorded, so polling the same closed call again never repeats it; each further hoax closure of that number raises it again.
+- `HOAX_STRIKES_TO_BLOCK=0` records strikes and neither blocks a device nor raises either alert.
+- **Manual block and unblock** through the admin API, for a device id or a phone number.
 - **Effect:** a blocked device or phone number gets 403 on `POST /v1/sos`, and a blocked device on register. No reason is given.
 - **Phone numbers in strikes and blocks** are stored as `HMAC-SHA256(PHONE_HASH_SECRET, e164)`, never in the clear.
 
-Known gap: the phone number is unverified, so the per-phone limit and phone blocks can be dodged by typing another number. Device limits rest on attestation and are the real control. A reinstall produces a new device; the registration limit slows that down but does not stop it.
+Known gap: the phone number is unverified, so the per-phone limit and manual phone blocks can be dodged by typing another number. Device limits rest on attestation and are the real control. A reinstall produces a new device; the registration limit slows that down but does not stop it.
 
 ---
 
@@ -422,7 +433,7 @@ The `text` field makes the body usable by Slack and Discord webhooks as it is.
 |---|---|
 | **Critical** | Delivery paused; field policy cannot be met; call type or priority not found; whole-intake breaker tripped |
 | **High** | A submission ended `failed`; Core rejected a call with a 4xx |
-| **Warning** | Key expires within 30 days, and again within 7; unknown call state; queue depth or oldest queued age over threshold; automatic block applied |
+| **Warning** | Key expires within 30 days, and again within 7; unknown call state; queue depth or oldest queued age over threshold; automatic device block applied or lifted; a phone number reached the hoax strike threshold (not blocked, §9.2) |
 
 - 3-second timeout, three tries, never on the SOS request path.
 - The same code is sent at most once per 15 minutes, except a failed submission, which always sends.
@@ -518,7 +529,7 @@ Deployment itself is outside this build. The repo carries what it needs.
 ## 15. Stack, testing and acceptance
 
 ### 15.1 Stack
-TypeScript strict, ES modules, Node 22, npm. Fastify 5. TypeBox schemas, with an OpenAPI document published by `@fastify/swagger` for the app to generate its client from. Kysely over `pg` with plain SQL migrations. `undici` for Core. `pino`. `libphonenumber-js`. `google-auth-library` for the Play Integrity decode call. An in-repo App Attest verifier on Node's crypto and a CBOR decoder. Biome. Vitest.
+TypeScript strict, ES modules, Node 22, npm. Fastify 5. TypeBox schemas, with an OpenAPI document published by `@fastify/swagger` at `/v1/openapi.json` for the app to generate its client from, committed as `docs/openapi.json` (`npm run openapi`; a test fails when it is stale). Kysely over `pg` with plain SQL migrations. `undici` for Core. `pino`. `libphonenumber-js`. `google-auth-library` for the Play Integrity decode call. An in-repo App Attest verifier on Node's crypto and a CBOR decoder. Biome. Vitest.
 
 ### 15.2 Testing
 - **Unit:** Core body allowlist, state mapping, sanitising, reference codes, backoff schedule, limit windows, note block, attestation verifiers against fixtures.
@@ -532,14 +543,14 @@ TypeScript strict, ES modules, Node 22, npm. Fastify 5. TypeBox schemas, with an
 - [ ] AC2. `POST /v1/sos` answers within 8 s in every Core failure mode.
 - [ ] AC3. A retry with the same `Idempotency-Key` creates no second submission and no second Core call, and returns the status token.
 - [ ] AC4. Killing the process after acceptance and restarting it still delivers the SOS.
-- [ ] AC5. A Core 401 pauses delivery, raises a critical alert, makes new SOS return 503, and survives a restart. Resume works only through the admin API.
+- [ ] AC5. A Core 401 pauses delivery, raises a critical alert, makes new SOS return 503, and survives a restart. The SOS whose inline attempt got the 401 is answered 503 and marked `failed`, and is never delivered. Resume works only through the admin API.
 - [ ] AC6. A queued submission becomes `failed` at 30 minutes and raises an alert.
 - [ ] AC7. A second SOS from a device with one open returns 409 with the open receipt.
 - [ ] AC8. A dispatch in Core shows as `dispatched` within 15 s; a close as `closed` within 60 s.
 - [ ] AC9. The status endpoint makes no Core call, and returns 404 for a wrong token.
 - [ ] AC10. No `SaveCall` body ever contains a key outside the allowlist.
 - [ ] AC11. A demo submission never reaches Core and walks through `received`, `dispatched`, `closed`.
-- [ ] AC12. Each limit in §9.1 refuses at its threshold; two hoax closures block the device.
+- [ ] AC12. Each limit in §9.1 refuses at its threshold; two hoax closures block the device, and two on one phone number raise an alert without blocking it.
 - [ ] AC13. In `enforce` mode a missing or invalid attestation is a 403; the process refuses `permissive` in production without the override.
 - [ ] AC14. Submissions older than 30 days are gone after the purge job runs.
 - [ ] AC15. No log line, alert or metric contains a phone number, name, coordinate, free text, token or key.
@@ -555,7 +566,8 @@ TypeScript strict, ES modules, Node 22, npm. Fastify 5. TypeBox schemas, with an
 | Q2 | Settled: `location.source` is `gps`, `network` or `last_known`. |
 | Q3, §12.3 | Settled: the demo intake lives on the production relay and never reaches Core (§6.3). |
 | §10.3, §10.4 | Pin the Let's Encrypt root keys, not the relay's leaf key (§10.2). |
-| §7.1, 503 row | A 503 also means "the relay cannot deliver right now" (paused or unhealthy). The copy "Too many requests" is wrong for that case; the action (show the call button, no auto-retry) is right. |
+| §7.1, 503 row | A 503 also means "the relay cannot deliver right now" (paused or unhealthy), including when Core refuses the relay's key during the request itself (§8.1). The copy "Too many requests" is wrong for that case; the action (show the call button, no auto-retry) is right. A 503 always means not sent: the relay never delivers that SOS later. |
+| §6.3, §7.1, §8, §9 | Outbox retries rebuild the body: a saved fix more than 8 minutes old is replaced with a fresh one, or left out (address given) or waited for (no address), so a retry is never refused for a stale location (§7.4). The relay matches a retry by `Idempotency-Key` alone and does not compare bodies (§8.3), and the attestation is computed over each attempt's bytes. The outbox stores the form fields and fix, not the serialised request. |
 | §7.1, 201 rows | A replay can return 201 with `dispatched` or `closed`, not only `received` or `failed`. |
 | §7.1, 409 row | The 409 body includes `statusToken`, `reference` and `status` as well as `receiptId`. |
 | §7, registration | On renewal, send the current device token so the device keeps its identity (§7.2). On iOS a renewal attests a new key. |
@@ -573,8 +585,8 @@ TypeScript strict, ES modules, Node 22, npm. Fastify 5. TypeBox schemas, with an
 | R2 | Not yet run against a real Core | Everything is tested against the mock. The `integration.md` §11 checklist must pass against a Sentinel test department before go-live. |
 | R3 | Core text length limits unknown | `integration.md` §4.2. The live checklist records the longest accepted `Nature`, `Address` and `Note`. |
 | R4 | Deleted calls | What `GetCall` returns for a deleted call is unverified. Either answer maps to a sensible status. |
-| R5 | Automatic blocks can lock out a real caller | Two "unfounded" closures block for 30 days. Tunable, and can be set to alert-only (§9.2). Review during the pilot. |
+| R5 | Automatic device blocks can lock out a real caller | Two "unfounded" closures block the device for 30 days. Tunable; 0 turns automatic blocks off (§9.2). Phone numbers are never blocked automatically. Review during the pilot. |
 | R6 | 24-hour forced close | A call still active after 24 hours shows "Closed" in the app. |
-| R7 | Unverified phone numbers | See §9.2. |
+| R7 | Unverified phone numbers | The per-phone limit and manual phone blocks can be dodged by typing another number, and a stranger's number can be given in hoaxes. That is why phone strikes only raise an alert for an operator to judge, and never block automatically (§9.2). |
 | R8 | Shared static egress IP | See §14. |
 | R9 | Single department | A second department needs a schema migration and per-department config. |

@@ -18,13 +18,13 @@ import {
   sha256,
   TEAM_ID,
 } from './fixtures.js';
-import { CERT_COLON_HEX, NOW, PACKAGE, verdict } from './playFixtures.js';
+import { CERT_COLON_HEX, fakeJweToken, NOW, PACKAGE, verdict } from './playFixtures.js';
 
 const NONCE = 'c2VydmVyLW5vbmNlLXZhbHVlLTMyLWJ5dGVz';
 const IDEM = '5b0c3f2e-8a51-4f3c-9d7e-0a1b2c3d4e5f';
 const BODY = Buffer.from('{"intakeCode":"demo","nature":"fire","phone":"+15550100"}');
 const H = bindingHash(IDEM, BODY);
-const ANDROID_TOKEN = 'eyJhbGciOiJBMjU2S1ciLCJlbmMiOiJBMjU2R0NNIn0.SECRET-TOKEN-MATERIAL.x.y.z';
+const ANDROID_TOKEN = fakeJweToken('SECRET-TOKEN-MATERIAL', 'x', 'y', 'z');
 
 class RecordingMetrics implements Metrics {
   counts: { name: MetricName; labels?: Labels }[] = [];
