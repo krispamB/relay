@@ -7,7 +7,7 @@ tsx mock-core/main.ts            # dev
 node dist/mock-core/main.js      # Docker
 ```
 
-Env: `PORT` (4010), `HOST` (0.0.0.0), `MOCK_CORE_API_KEY` (default `rgk_AbCdEfGh_` + 43 `s`). It seeds the call
+Env: `PORT` (4010), `HOST` (0.0.0.0), `MOCK_CORE_API_KEY` (default `rgk_AbCdEfGh_` + 43 `s`). When run standalone (`main.ts`), it seeds the call
 type `Public SOS` and priority `3` / `High`. One log line per request, never the API key.
 
 Point the relay at it: `RESGRID_API_BASE=http://mock-core:4010`, `RESGRID_API_KEY=<same key>`.

@@ -79,10 +79,7 @@ Expected: step 4 returns HTTP 201 with `"status": "received"`; step 6 shows one 
 
 To try the demo intake, use `"intakeCode":"DEMO-INTAKE-01"` in step 4: it answers `received` at once and never touches the mock Core, then moves to `dispatched` after 30 s and `closed` after 90 s.
 
-**Verification of this walk-through** (run on 2026-11-17 against the built Compose images, with host ports remapped because 3000 and 3001 were taken on that machine):
-
-- Seen working: the image builds, the migration runs, the relay starts; steps 2 to 7 and the demo intake (HTTP 201, `received`, no call in the mock); the admin `health`, `resume`, `submissions/:reference` and `/metrics` calls, and a 401 without the admin token.
-- **Not seen working:** step 1 showed `"available": false` and step 4 returned HTTP 503 until the startup check was faked by setting `check_status`/`check_ok_at` in `relay_state` by hand. At that time `src/jobs/index.ts` registered only the delivery worker, so no policy check ran and the intake stayed unavailable (PRD section 6.4). Step 8 (`dispatched`) and the demo intake's move to `dispatched` and `closed` could not be observed either, because no status poller was running. Re-run the walk-through from a clean `docker compose up --build` once those jobs are registered, and delete this paragraph when it passes unmodified.
+**Verified** on 2026-11-17 from a clean `docker compose up --build` (host ports remapped, because 3000 and 3001 were taken on that machine): steps 1 to 8 gave the expected results, a repeat of step 4 with the same key returned the same receipt without a second call in the mock, and the demo intake moved to `dispatched` without reaching the mock Core.
 
 Stop with `docker compose down` (add `-v` to drop the database).
 
