@@ -1,0 +1,54 @@
+{
+  "name": "sos-relay",
+  "version": "0.1.0",
+  "scripts": {
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/src/main.js",
+    "dev": "tsx watch src/main.ts",
+    "migrate": "node dist/src/db/migrate.js",
+    "migrate:dev": "tsx src/db/migrate.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "mock-core": "tsx mock-core/main.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/krispamB/relay.git"
+  },
+  "bugs": {
+    "url": "https://github.com/krispamB/relay/issues"
+  },
+  "homepage": "https://github.com/krispamB/relay#readme",
+  "private": true,
+  "dependencies": {
+    "@fastify/swagger": "^9.9.5",
+    "@fastify/type-provider-typebox": "^6.3.0",
+    "@sinclair/typebox": "^0.34.52",
+    "cbor-x": "^1.6.9",
+    "fastify": "^5.12.8",
+    "google-auth-library": "^11.3.4",
+    "kysely": "^0.29.9",
+    "libphonenumber-js": "^1.13.16",
+    "pg": "^8.23.1",
+    "pino": "^10.4.0",
+    "prom-client": "^15.1.3",
+    "ulid": "^3.0.2",
+    "undici": "^8.12.4"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.8",
+    "@testcontainers/postgresql": "^12.2.1",
+    "@types/node": "^22.20.5",
+    "@types/pg": "^8.23.1",
+    "testcontainers": "^12.2.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "type": "module"
+}
