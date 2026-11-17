@@ -427,7 +427,7 @@ can send again.
 ```http
 POST /v1/sos
 Content-Type: application/json
-Authorization: Bearer hwPISMTJho5zG47egPltSbsUoKUYy3Wze9u1ovC4WhY
+Authorization: Bearer <deviceToken>
 Idempotency-Key: 90c85a55-64d7-4d66-818c-da8939ab253b
 X-Attestation: <fresh token or assertion over h>
 
