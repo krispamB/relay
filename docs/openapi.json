@@ -1,0 +1,1298 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "SOS Relay public API",
+    "version": "1.0.0"
+  },
+  "components": {
+    "securitySchemes": {
+      "deviceToken": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {}
+  },
+  "paths": {
+    "/v1/intake/{intakeCode}": {
+      "get": {
+        "operationId": "getIntake",
+        "summary": "Describe an intake: department, natures, availability and required fields.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "intakeCode",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "intakeCode",
+                    "displayName",
+                    "emergencyPhone",
+                    "natures",
+                    "requireVerifiedPhone",
+                    "available",
+                    "demo",
+                    "required"
+                  ],
+                  "properties": {
+                    "intakeCode": {
+                      "type": "string"
+                    },
+                    "displayName": {
+                      "type": "string"
+                    },
+                    "emergencyPhone": {
+                      "type": "string"
+                    },
+                    "natures": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "label"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "requireVerifiedPhone": {
+                      "type": "boolean"
+                    },
+                    "available": {
+                      "description": "False while the relay cannot take an SOS for this intake.",
+                      "type": "boolean"
+                    },
+                    "demo": {
+                      "type": "boolean"
+                    },
+                    "required": {
+                      "type": "object",
+                      "required": [
+                        "location",
+                        "address",
+                        "name"
+                      ],
+                      "properties": {
+                        "location": {
+                          "type": "boolean"
+                        },
+                        "address": {
+                          "type": "boolean"
+                        },
+                        "name": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/devices/nonce": {
+      "get": {
+        "operationId": "getDeviceNonce",
+        "summary": "Get a single-use registration nonce, valid for 5 minutes.",
+        "tags": [
+          "devices"
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "nonce",
+                    "expiresAt"
+                  ],
+                  "properties": {
+                    "nonce": {
+                      "pattern": "^[A-Za-z0-9_-]{43}$",
+                      "description": "The nonce from GET /v1/devices/nonce, as-is. URL-safe base64 without padding, 43 characters.",
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "format": "date-time",
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Error body (PRD §7). A 403 never says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Error body (PRD §7). A 403 never says why.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/devices/register": {
+      "post": {
+        "operationId": "registerDevice",
+        "summary": "Register or renew a device with a platform attestation.",
+        "tags": [
+          "devices"
+        ],
+        "description": "Send the current device token as Authorization: Bearer to renew: the deviceId is kept, even if the token has expired. Without a known token a new device is created. Fetch a new nonce after any failure.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "description": "attestation is required in enforce mode; it may be left out only against a relay in permissive mode.",
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "type": "object",
+                    "required": [
+                      "platform",
+                      "nonce"
+                    ],
+                    "properties": {
+                      "platform": {
+                        "type": "string",
+                        "enum": [
+                          "android"
+                        ]
+                      },
+                      "nonce": {
+                        "pattern": "^[A-Za-z0-9_-]{43}$",
+                        "description": "The nonce from GET /v1/devices/nonce, as-is. URL-safe base64 without padding, 43 characters.",
+                        "type": "string"
+                      },
+                      "attestation": {
+                        "additionalProperties": false,
+                        "type": "object",
+                        "required": [
+                          "integrityToken"
+                        ],
+                        "properties": {
+                          "integrityToken": {
+                            "minLength": 1,
+                            "maxLength": 16384,
+                            "description": "IntegrityTokenResponse.token() from a classic Play Integrity request with the nonce, as-is.",
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "additionalProperties": false,
+                    "type": "object",
+                    "required": [
+                      "platform",
+                      "nonce"
+                    ],
+                    "properties": {
+                      "platform": {
+                        "type": "string",
+                        "enum": [
+                          "ios"
+                        ]
+                      },
+                      "nonce": {
+                        "pattern": "^[A-Za-z0-9_-]{43}$",
+                        "description": "The nonce from GET /v1/devices/nonce, as-is. URL-safe base64 without padding, 43 characters.",
+                        "type": "string"
+                      },
+                      "attestation": {
+                        "additionalProperties": false,
+                        "type": "object",
+                        "required": [
+                          "keyId",
+                          "attestationObject"
+                        ],
+                        "properties": {
+                          "keyId": {
+                            "minLength": 1,
+                            "maxLength": 128,
+                            "description": "The App Attest key id from generateKey(), standard base64.",
+                            "type": "string"
+                          },
+                          "attestationObject": {
+                            "minLength": 1,
+                            "maxLength": 87384,
+                            "description": "attestKey(keyId, clientDataHash: SHA-256(UTF-8(nonce))), standard base64.",
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "description": "attestation is required in enforce mode; it may be left out only against a relay in permissive mode."
+        },
+        "security": [
+          {
+            "deviceToken": []
+          },
+          {}
+        ],
+        "responses": {
+          "201": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "deviceId",
+                    "deviceToken",
+                    "expiresAt"
+                  ],
+                  "properties": {
+                    "deviceId": {
+                      "pattern": "^dev_[0-9A-HJKMNP-TV-Z]{26}$",
+                      "type": "string"
+                    },
+                    "deviceToken": {
+                      "description": "Opaque. Send as Authorization: Bearer. Store securely.",
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "format": "date-time",
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error body (PRD §7). A 403 never says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Error body (PRD §7). A 403 never says why.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error body (PRD §7). A 403 never says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Error body (PRD §7). A 403 never says why.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Error body (PRD §7). A 403 never says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Error body (PRD §7). A 403 never says why.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sos": {
+      "post": {
+        "summary": "Send an SOS",
+        "tags": [
+          "sos"
+        ],
+        "description": "Order of checks: device token (401), device block (403), headers and body (400), attestation (403), intake (404/410), replay of the same Idempotency-Key (201/202), open SOS (409), phone block (403), rate limits (429, or 503 for the whole-intake breaker), availability (503), then persist and deliver. A 503 can also come after the SOS was saved, when Core refuses the relay's API key or delivery is paused before the inline attempt: the SOS is then marked failed, will never be delivered, and a replay of the same Idempotency-Key returns 201 `failed`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "intakeCode",
+                  "nature",
+                  "phone"
+                ],
+                "properties": {
+                  "intakeCode": {
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "type": "string"
+                  },
+                  "nature": {
+                    "minLength": 1,
+                    "maxLength": 40,
+                    "description": "One of the intake's nature ids.",
+                    "type": "string"
+                  },
+                  "phone": {
+                    "pattern": "^\\+[1-9][0-9]{1,14}$",
+                    "description": "Callback number in E.164, valid per libphonenumber-js.",
+                    "type": "string"
+                  },
+                  "location": {
+                    "additionalProperties": false,
+                    "description": "A location that is out of range, 0,0, stale or in the future is dropped when an address is given, and is a 400 otherwise.",
+                    "type": "object",
+                    "required": [
+                      "lat",
+                      "lon",
+                      "capturedAt",
+                      "source"
+                    ],
+                    "properties": {
+                      "lat": {
+                        "description": "Latitude in degrees, -90 to 90.",
+                        "type": "number"
+                      },
+                      "lon": {
+                        "description": "Longitude in degrees, -180 to 180.",
+                        "type": "number"
+                      },
+                      "accuracyM": {
+                        "description": "Horizontal accuracy in metres.",
+                        "type": "number"
+                      },
+                      "capturedAt": {
+                        "format": "date-time",
+                        "description": "When the fix was taken (RFC 3339). At most 10 minutes old and not in the future.",
+                        "type": "string"
+                      },
+                      "source": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "gps"
+                            ]
+                          },
+                          {
+                            "type": "string",
+                            "enum": [
+                              "network"
+                            ]
+                          },
+                          {
+                            "type": "string",
+                            "enum": [
+                              "last_known"
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "address": {
+                    "description": "Up to 500 characters after sanitising. Required when there is no usable location.",
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "Up to 100 characters after sanitising.",
+                    "type": "string"
+                  },
+                  "details": {
+                    "description": "Up to 1000 characters after sanitising.",
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+              "type": "string"
+            },
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "description": "UUID. One per SOS, reused on every retry of it."
+          },
+          {
+            "schema": {
+              "maxLength": 16384,
+              "type": "string"
+            },
+            "in": "header",
+            "name": "x-attestation",
+            "required": false,
+            "description": "Fresh per attempt. See docs/attestation-contract.md."
+          }
+        ],
+        "security": [
+          {
+            "deviceToken": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Core created the pending call (`received`), Core rejected it for good (`failed`), or a replay of an SOS that is no longer queued. A replay of an SOS that was answered 503 after it was saved returns `failed`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Core created the pending call (`received`), Core rejected it for good (`failed`), or a replay of an SOS that is no longer queued. A replay of an SOS that was answered 503 after it was saved returns `failed`.",
+                  "type": "object",
+                  "required": [
+                    "receiptId",
+                    "statusToken",
+                    "reference",
+                    "status",
+                    "submittedAt"
+                  ],
+                  "properties": {
+                    "receiptId": {
+                      "description": "`sos_` + ULID.",
+                      "type": "string"
+                    },
+                    "statusToken": {
+                      "description": "Send as `X-Status-Token` to the status endpoint.",
+                      "type": "string"
+                    },
+                    "reference": {
+                      "description": "`SOS-` + 4 characters.",
+                      "type": "string"
+                    },
+                    "status": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "queued"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "received"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "dispatched"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "closed"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "failed"
+                          ]
+                        }
+                      ]
+                    },
+                    "submittedAt": {
+                      "format": "date-time",
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Saved; delivery is being retried (`queued`) after a timeout, network error, 409, 429 or 5xx from Core. Also a replay of an SOS still queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Saved; delivery is being retried (`queued`) after a timeout, network error, 409, 429 or 5xx from Core. Also a replay of an SOS still queued.",
+                  "type": "object",
+                  "required": [
+                    "receiptId",
+                    "statusToken",
+                    "reference",
+                    "status",
+                    "submittedAt"
+                  ],
+                  "properties": {
+                    "receiptId": {
+                      "description": "`sos_` + ULID.",
+                      "type": "string"
+                    },
+                    "statusToken": {
+                      "description": "Send as `X-Status-Token` to the status endpoint.",
+                      "type": "string"
+                    },
+                    "reference": {
+                      "description": "`SOS-` + 4 characters.",
+                      "type": "string"
+                    },
+                    "status": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "queued"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "received"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "dispatched"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "closed"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "failed"
+                          ]
+                        }
+                      ]
+                    },
+                    "submittedAt": {
+                      "format": "date-time",
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Headers or body not valid. Do not retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Headers or body not valid. Do not retry.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Device token missing, invalid or expired. Re-register, then retry with the same key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Device token missing, invalid or expired. Re-register, then retry with the same key.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed. No reason is given.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Not allowed. No reason is given.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown intake.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Unknown intake.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "An SOS from this device is already open; its receipt and status token are returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "An SOS from this device is already open; its receipt and status token are returned.",
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "receiptId",
+                    "statusToken",
+                    "reference",
+                    "status",
+                    "submittedAt"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    "receiptId": {
+                      "description": "`sos_` + ULID.",
+                      "type": "string"
+                    },
+                    "statusToken": {
+                      "description": "Send as `X-Status-Token` to the status endpoint.",
+                      "type": "string"
+                    },
+                    "reference": {
+                      "description": "`SOS-` + 4 characters.",
+                      "type": "string"
+                    },
+                    "status": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "queued"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "received"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "dispatched"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "closed"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "failed"
+                          ]
+                        }
+                      ]
+                    },
+                    "submittedAt": {
+                      "format": "date-time",
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Intake disabled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Intake disabled.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited. `Retry-After` matches `retryAfterSeconds`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Rate limited. `Retry-After` matches `retryAfterSeconds`.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Cannot take an SOS right now: delivery is paused or the relay cannot verify its Core configuration (code `unavailable`), or the whole-intake breaker tripped (code `intake_busy`). Nothing will be delivered: the SOS was either not saved, or saved and marked failed because Core refused the relay's API key during this request. Show the emergency phone number; do not auto-retry. `Retry-After` matches `retryAfterSeconds`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Cannot take an SOS right now: delivery is paused or the relay cannot verify its Core configuration (code `unavailable`), or the whole-intake breaker tripped (code `intake_busy`). Nothing will be delivered: the SOS was either not saved, or saved and marked failed because Core refused the relay's API key during this request. Show the emergency phone number; do not auto-retry. `Retry-After` matches `retryAfterSeconds`.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sos/{receiptId}/status": {
+      "get": {
+        "operationId": "getSosStatus",
+        "summary": "Status of one SOS. Needs the X-Status-Token returned when the SOS was accepted.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "receiptId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "header",
+            "name": "x-status-token",
+            "required": false,
+            "description": "The status token returned with the receipt."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "status",
+                    "reference",
+                    "updatedAt"
+                  ],
+                  "properties": {
+                    "status": {
+                      "description": "Where the SOS is now.",
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "queued"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "received"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "dispatched"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "closed"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "failed"
+                          ]
+                        }
+                      ]
+                    },
+                    "reference": {
+                      "description": "Short code the caller can quote, such as SOS-7KQ2.",
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "format": "date-time",
+                      "description": "Time of the last status change.",
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

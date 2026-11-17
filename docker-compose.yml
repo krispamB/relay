@@ -1,0 +1,70 @@
+# Local development stack. Development secrets below are fake; never reuse them.
+x-relay-env: &relay-env
+  NODE_ENV: development
+  HOST: 0.0.0.0
+  PORT: "3000"
+  ADMIN_PORT: "3001"
+  DATABASE_URL: postgres://relay:relay@postgres:5432/relay
+  RESGRID_API_BASE: http://mock-core:4010
+  RESGRID_API_KEY: rgk_local_development_key_not_a_real_secret_0001
+  RESGRID_API_KEY_EXPIRES_ON: "2030-01-01"
+  RESGRID_CALL_TYPE_NAME: Public SOS
+  RESGRID_PRIORITY_ID: "3"
+  INTAKES_FILE: /app/intakes.json
+  ATTESTATION_MODE: permissive
+  STATUS_TOKEN_SECRET: dev-only-status-token-secret-not-for-production-0001
+  PHONE_HASH_SECRET: dev-only-phone-hash-secret-not-for-production-0001
+  ADMIN_TOKEN: dev-only-admin-token-not-for-production-000000001
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: relay
+      POSTGRES_PASSWORD: relay
+      POSTGRES_DB: relay
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U relay -d relay"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  mock-core:
+    build: .
+    command: ["node", "dist/mock-core/main.js"]
+    environment:
+      PORT: "4010"
+      HOST: 0.0.0.0
+      MOCK_CORE_API_KEY: rgk_local_development_key_not_a_real_secret_0001
+    ports:
+      - "4010:4010"
+
+  migrate:
+    build: .
+    command: ["node", "dist/src/db/migrate.js"]
+    environment:
+      <<: *relay-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  relay:
+    build: .
+    environment:
+      <<: *relay-env
+    volumes:
+      - ./intakes.example.json:/app/intakes.json:ro
+    ports:
+      - "3000:3000"
+      - "127.0.0.1:3001:3001"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mock-core:
+        condition: service_started
+
+volumes:
+  pgdata:

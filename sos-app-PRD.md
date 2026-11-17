@@ -108,7 +108,8 @@ Tapping the SOS button opens the form and starts the location fix at the same mo
 
 Location rules:
 - Request a high-accuracy fix when the form opens (`expo-location`, foreground only). Show the last known position at once if it is under 2 minutes old, then keep refining until Send.
-- Send the best fix available with `accuracyM`, `capturedAt` and `source`.
+- Send the best fix available with `accuracyM`, `capturedAt` and `source`. `capturedAt` is the fix's own timestamp, never the time of sending.
+- The relay refuses a fix older than 10 minutes (relay §7.4): it drops it if an address is given, and answers 400 if not. Retries from the outbox must refresh it (§8).
 - If Send is pressed with no fix yet, wait up to 5 seconds. If there is still none, require the address field.
 - If the best accuracy is worse than 100 m, prompt (don't force) the caller to add an address or landmark.
 
@@ -162,7 +163,7 @@ Base URL from `EXPO_PUBLIC_RELAY_BASE_URL`. JSON over TLS. The app sends no cook
 | **201** `status: "received"` | Store receipt and status token, go to Status screen ("Received"). |
 | **201** `status: "failed"` | Status screen, "NOT DELIVERED", call button primary. |
 | **202** `status: "queued"` | Store receipt, go to Status screen ("Sent, waiting to reach dispatch"), start polling. |
-| **400** | Should not happen with a correct client. Show "Could not send. Call {emergencyPhone}." Log the error code for crash reporting. Do not retry. |
+| **400** | Should not happen with a correct client (an outbox retry that follows §8 is never refused for a stale location). Show "Could not send. Call {emergencyPhone}." Log the error code for crash reporting. Do not retry. |
 | **401** | Device token invalid or expired. Re-register once, then retry with the same `Idempotency-Key`. If that fails, show the call button. |
 | **403** | Blocked or attestation failed. Show "This phone can't send an SOS from the app. Call {emergencyPhone}." Do not retry, and do not say why. |
 | **409** | An SOS from this device is already open. Store the returned `receiptId` and show its status. |
@@ -182,9 +183,14 @@ Every error state shows the emergency phone number.
 
 ## 8. Offline and retry (outbox)
 
-- If the SOS can't be delivered to the relay, the full request (with its `Idempotency-Key`) is saved to encrypted device storage before the caller sees any result. At most one SOS can be in the outbox.
+- If the SOS can't be delivered to the relay, it is saved to encrypted device storage before the caller sees any result: its `Idempotency-Key`, the form fields, the location fix, and the time of the first attempt. At most one SOS can be in the outbox.
 - The caller sees "NOT SENT YET" with the call button as the primary action.
 - Retries: immediately when connectivity returns, otherwise at 5 s, 15 s, 30 s, then every 30 s, for up to 30 minutes from the first attempt. A fresh attestation is obtained for each attempt.
+- **Location on retry.** The relay refuses a fix older than 10 minutes, so each attempt rebuilds the body. If the saved fix is more than 8 minutes old (the margin covers clock drift and time in flight), the app takes a new fix first (foreground, waiting up to 5 seconds, as in §6.3) and sends that instead. The body is then serialised again and the attestation computed over the new bytes, with the same `Idempotency-Key`. The relay allows this: a retry of an SOS it already accepted is matched by the key alone, and the body is not compared.
+- **No fresh fix.** The app does not send the old fix.
+  - If the caller gave an address, the attempt is sent without `location`.
+  - If not, the "NOT SENT YET" screen shows the **Address / landmark** field and retries wait until the caller fills it in or a fresh fix arrives. The call button stays the primary action.
+  - If the intake requires a location (`required.location`), an address is not enough: the app keeps trying for a fix until the 30 minutes are up.
 - Retries run while the app is in the foreground. A background task is registered as a best effort, but neither OS guarantees it will run, so the UI must not promise delivery after the app is closed. The screen says: "Keep the app open."
 - If the app is reopened with an SOS still in the outbox and under 30 minutes old, retries resume. Older than 30 minutes: mark it "NOT DELIVERED" and stop. A late SOS that arrives hours later with stale location is worse than a clear failure.
 - Because the same `Idempotency-Key` is reused, a retry after an ambiguous timeout cannot create a second submission at the relay.
@@ -197,7 +203,7 @@ Every error state shows the emergency phone number.
 |---|---|---|
 | Device id, device token, iOS attest key id | `expo-secure-store` | Until uninstall or token replacement |
 | Active receipt id, status token, reference | `expo-secure-store` | Until the SOS is dismissed; auto-removed 24 h after `closed`/`failed` |
-| Outbox (pending SOS payload) | `expo-secure-store` | Until delivered or expired (30 min) |
+| Outbox (pending SOS: `Idempotency-Key`, form fields, location fix, first-attempt time) | `expo-secure-store` | Until delivered or expired (30 min) |
 | Saved phone number and name | `expo-secure-store` | Until the caller clears them |
 | Intake code and cached intake config | App storage (not sensitive) | Refreshed on foreground |
 | First-launch notice seen | App storage | Permanent |
