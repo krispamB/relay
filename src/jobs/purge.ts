@@ -19,6 +19,7 @@ const MAX_BATCHES = 200;
 export interface PurgeCounts {
   submissions: number;
   devices: number;
+  registrations: number;
   strikes: number;
   blocks: number;
   nonces: number;
@@ -99,6 +100,23 @@ export async function runPurgePass(ctx: AppContext): Promise<PurgeCounts> {
                   ),
                 ),
               )
+              .limit(PURGE_BATCH),
+          )
+          .executeTakeFirst(),
+      ),
+    ),
+    // A device that keeps renewing never expires, so its registration rows are aged out on their own.
+    registrations: await inBatches(async () =>
+      count(
+        await db
+          .deleteFrom('device_registrations')
+          .where(
+            'id',
+            'in',
+            db
+              .selectFrom('device_registrations')
+              .select('id')
+              .where('created_at', '<', submissionCutoff)
               .limit(PURGE_BATCH),
           )
           .executeTakeFirst(),

@@ -15,6 +15,7 @@
  * own transaction, which re-reads the row and ignores the result if the row changed meanwhile.
  * Alerts are raised only after that transaction commits.
  */
+
 import { sql } from 'kysely';
 import { type BlockChange, raiseBlockAlerts, recordHoaxStrikes, removeStrikes } from '../abuse/strikes.js';
 import { ALERT_CODES } from '../alerts.js';
@@ -23,6 +24,7 @@ import type { AppContext } from '../context.js';
 import type { CallStateResult, CoreResult } from '../core/types.js';
 import { type Db, isUniqueViolation } from '../db/index.js';
 import { OPEN_STATUSES, type Submission, type SubmissionStatus, type SubmissionUpdate } from '../db/types.js';
+import { safeError } from '../errors.js';
 import { METRICS } from '../metrics.js';
 import { getState, pauseDelivery } from '../state.js';
 import type { Job } from './runner.js';
@@ -252,7 +254,7 @@ async function safely<T>(ctx: AppContext, fn: () => Promise<CoreResult<T>>): Pro
   try {
     return await fn();
   } catch (err) {
-    ctx.log.error({ err }, 'core client threw');
+    ctx.log.error({ error: safeError(err) }, 'core client threw');
     return { kind: 'retryable', reason: 'client error' };
   }
 }
@@ -490,6 +492,7 @@ async function applyCallState(ctx: AppContext, claimed: Row, result: CallStateRe
         .select(['id', 'reference'])
         .where('device_id', '=', row.device_id)
         .where('id', '!=', row.id)
+        .where('is_demo', '=', row.is_demo)
         .where('status', 'in', OPEN_STATUSES)
         .limit(1)
         .executeTakeFirst();

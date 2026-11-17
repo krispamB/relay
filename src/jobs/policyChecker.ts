@@ -9,10 +9,12 @@
  * The job never throws and never exits the process: a crash loop with a bad key could trip Core's
  * lockout (integration.md §2.4).
  */
+
 import { ALERT_CODES } from '../alerts.js';
 import { DAY, HOUR, MINUTE, SECOND } from '../clock.js';
 import type { AppContext } from '../context.js';
 import type { CoreResult } from '../core/types.js';
+import { safeError } from '../errors.js';
 import { METRICS } from '../metrics.js';
 import { type CheckResult, getState, pauseDelivery, recordCheck } from '../state.js';
 import type { Job } from './runner.js';
@@ -78,7 +80,7 @@ async function safely<T>(ctx: AppContext, fn: () => Promise<CoreResult<T>>): Pro
   try {
     return await fn();
   } catch (err) {
-    ctx.log.error({ err }, 'core client threw');
+    ctx.log.error({ error: safeError(err) }, 'core client threw');
     return { kind: 'retryable', reason: 'client error' };
   }
 }
@@ -251,7 +253,7 @@ export function createPolicyChecker(ctx: AppContext): PolicyCheckerJob {
         await checkKeyExpiry(ctx);
       }
     } catch (err) {
-      ctx.log.error({ err }, 'key expiry check failed');
+      ctx.log.error({ error: safeError(err) }, 'key expiry check failed');
     }
     if (now < nextAt) return;
 
@@ -260,7 +262,7 @@ export function createPolicyChecker(ctx: AppContext): PolicyCheckerJob {
       outcome = await runPolicyCheck(ctx);
     } catch (err) {
       // A database error, most likely: treat like an unreachable Core.
-      ctx.log.error({ err }, 'startup check failed unexpectedly');
+      ctx.log.error({ error: safeError(err) }, 'startup check failed unexpectedly');
       outcome = 'unreachable';
     }
     const after = ctx.clock.now().getTime();

@@ -42,10 +42,16 @@ describe('config', () => {
   });
 
   it('refuses permissive mode in production without the override', () => {
-    expect(() => loadConfig({ ...baseEnv, NODE_ENV: 'production' })).toThrow(/permissive/);
-    expect(() =>
-      loadConfig({ ...baseEnv, NODE_ENV: 'production', ALLOW_PERMISSIVE_IN_PRODUCTION: 'true' }),
-    ).not.toThrow();
+    const prod = { ...baseEnv, NODE_ENV: 'production', CLIENT_IP_HEADER: 'x-real-ip' };
+    expect(() => loadConfig(prod)).toThrow(/permissive/);
+    expect(() => loadConfig({ ...prod, ALLOW_PERMISSIVE_IN_PRODUCTION: 'true' })).not.toThrow();
+  });
+
+  it('needs the client IP header in production, so callers never share one rate limit', () => {
+    const prod = { ...baseEnv, NODE_ENV: 'production', ALLOW_PERMISSIVE_IN_PRODUCTION: 'true' };
+    expect(() => loadConfig(prod)).toThrow(/CLIENT_IP_HEADER/);
+    expect(() => loadConfig({ ...prod, CLIENT_IP_HEADER: 'X-Real-IP' })).not.toThrow();
+    expect(() => loadConfig({ ...prod, ALLOW_SOCKET_IP_IN_PRODUCTION: 'true' })).not.toThrow();
   });
 
   it('needs platform settings in enforce mode', () => {

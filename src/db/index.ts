@@ -4,8 +4,14 @@ import type { Database } from './types.js';
 
 export type Db = Kysely<Database>;
 
-export function createDb(connectionString: string, max = 10): Db {
-  const pool = new pg.Pool({ connectionString, max });
+export function createDb(
+  connectionString: string,
+  max = 10,
+  onIdleError: (code: string | undefined) => void = () => {},
+): Db {
+  const pool = new pg.Pool({ connectionString, max, connectionTimeoutMillis: 5000 });
+  // Without a listener, Postgres closing an idle connection (restart, failover) crashes the process.
+  pool.on('error', (err) => onIdleError((err as { code?: string }).code));
   return new Kysely<Database>({ dialect: new PostgresDialect({ pool }) });
 }
 

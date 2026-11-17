@@ -234,6 +234,11 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     limits,
   };
   if (!config.intakesFile && !config.intakesJson) problems.push('INTAKES_FILE or INTAKES_JSON is required');
+  if (nodeEnv === 'production' && !config.clientIpHeader && !bool('ALLOW_SOCKET_IP_IN_PRODUCTION', false)) {
+    problems.push(
+      'CLIENT_IP_HEADER is required when NODE_ENV=production: behind a proxy every caller would otherwise share one IP and one rate limit (set ALLOW_SOCKET_IP_IN_PRODUCTION=true if the relay is reached directly)',
+    );
+  }
   if (config.port === config.adminPort) problems.push('PORT and ADMIN_PORT must differ');
   if (config.demoCloseAfterS <= config.demoDispatchAfterS) {
     problems.push('DEMO_CLOSE_AFTER_S must be greater than DEMO_DISPATCH_AFTER_S');

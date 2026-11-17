@@ -29,7 +29,9 @@ async function main(): Promise<void> {
 
   const log = createLogger(config.logLevel);
   const clock = systemClock;
-  const db = createDb(config.databaseUrl);
+  const db = createDb(config.databaseUrl, 10, (code) =>
+    log.warn({ code }, 'idle database connection closed'),
+  );
   const metrics = createPromMetrics();
   const alerts = createWebhookAlerter({ db, clock, log, webhookUrl: config.alertWebhookUrl });
   const ctx: AppContext = {

@@ -2,12 +2,14 @@
  * One delivery attempt for one submission. sos-relay-PRD.md §6.3, §8.1, §8.3, §8.4.
  * Used by the HTTP route (inline attempt) and by the delivery worker.
  */
+
 import { ALERT_CODES } from '../alerts.js';
 import { addMs, MINUTE, SECOND } from '../clock.js';
 import type { AppContext } from '../context.js';
 import type { CoreResult } from '../core/types.js';
 import type { Db } from '../db/index.js';
 import type { Submission, SubmissionStatus, SubmissionUpdate } from '../db/types.js';
+import { safeError } from '../errors.js';
 import { METRICS } from '../metrics.js';
 import { pauseDelivery } from '../state.js';
 import { nextAttemptAt } from './backoff.js';
@@ -155,7 +157,10 @@ export async function attemptDelivery(
       );
     } catch (err) {
       // The client is not supposed to throw; if it does, the outcome is unknown, so retry.
-      ctx.log.error({ err, receiptId: row.id, reference: row.reference }, 'core client threw');
+      ctx.log.error(
+        { error: safeError(err), receiptId: row.id, reference: row.reference },
+        'core client threw',
+      );
       result = { kind: 'retryable', reason: 'client error' };
     }
     const now = ctx.clock.now();

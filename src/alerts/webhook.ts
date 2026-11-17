@@ -1,6 +1,7 @@
 import type { Alert, Alerter, Severity } from '../alerts.js';
 import { type Clock, MINUTE } from '../clock.js';
 import type { Db } from '../db/index.js';
+import { safeError } from '../errors.js';
 import type { Logger } from '../logger.js';
 
 export const ALERT_DEDUP_MS = 15 * MINUTE;
@@ -116,7 +117,10 @@ export function createWebhookAlerter(deps: WebhookAlerterDeps): FlushableAlerter
           send = await claim(alert.code, now, alert.always === true);
         } catch (err) {
           // Better a duplicate alert than none.
-          log.error({ err, code: alert.code }, 'alert de-duplication failed; sending anyway');
+          log.error(
+            { error: safeError(err), code: alert.code },
+            'alert de-duplication failed; sending anyway',
+          );
         }
         if (!send) return;
         const p: Promise<void> = deliver(alert, now)

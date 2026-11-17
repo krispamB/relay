@@ -138,7 +138,7 @@ export async function sosRoutes(app: PublicApp, ctx: AppContext): Promise<void> 
     if (prior) return sendReplay(req.log, reply, prior, st.demo);
 
     // Step 7.
-    const open = await findOpenSubmission(ctx.db, device.id);
+    const open = await findOpenSubmission(ctx.db, device.id, intake.demo);
     if (open) throw conflict(req.log, open, st.demo);
 
     // The checks that depend on the intake, the clock and the field policy.

@@ -39,11 +39,17 @@ export async function findByIdempotencyKey(
     .executeTakeFirst();
 }
 
-export async function findOpenSubmission(db: Db, deviceId: string): Promise<Submission | undefined> {
+/** The device's open SOS of the same kind. Real and demo submissions never stand in for each other. */
+export async function findOpenSubmission(
+  db: Db,
+  deviceId: string,
+  isDemo: boolean,
+): Promise<Submission | undefined> {
   return db
     .selectFrom('submissions')
     .selectAll()
     .where('device_id', '=', deviceId)
+    .where('is_demo', '=', isDemo)
     .where('status', 'in', OPEN_STATUSES)
     .executeTakeFirst();
 }
@@ -95,7 +101,7 @@ async function afterUniqueViolation(
     return row ? { kind: 'replay', row } : 'retry';
   }
   if (isUniqueViolation(err, OPEN_SUBMISSION_CONSTRAINT)) {
-    const row = await findOpenSubmission(db, input.device.id);
+    const row = await findOpenSubmission(db, input.device.id, input.intake.demo);
     return row ? { kind: 'open', row } : 'retry';
   }
   if (isUniqueViolation(err, REFERENCE_CONSTRAINT)) return 'retry';
@@ -110,7 +116,7 @@ async function persistOnce(ctx: AppContext, input: PersistInput): Promise<Persis
     // Steps 6 and 7 again, now that concurrent requests for this intake are serialised.
     const replay = await findByIdempotencyKey(trx, device.id, input.idempotencyKey);
     if (replay) return { kind: 'replay', row: replay };
-    const open = await findOpenSubmission(trx, device.id);
+    const open = await findOpenSubmission(trx, device.id, intake.demo);
     if (open) return { kind: 'open', row: open };
 
     const now = ctx.clock.now();

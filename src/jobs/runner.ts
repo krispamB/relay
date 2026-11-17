@@ -1,3 +1,4 @@
+import { safeError } from '../errors.js';
 import type { Logger } from '../logger.js';
 
 /** A background job. `run` does one pass and must be safe to call again after a failure. */
@@ -18,7 +19,7 @@ export function startJobs(jobs: Job[], log: Logger): { stop(): Promise<void> } {
     const timer = setTimeout(() => {
       const pass = job
         .run()
-        .catch((err) => log.error({ err, job: job.name }, 'job pass failed'))
+        .catch((err) => log.error({ error: safeError(err), job: job.name }, 'job pass failed'))
         .finally(() => {
           inFlight.delete(pass);
           schedule(job, job.intervalMs);

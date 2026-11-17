@@ -11,7 +11,7 @@ import Fastify, {
 import { sql } from 'kysely';
 import { MINUTE } from './clock.js';
 import type { AppContext } from './context.js';
-import { ApiError, errors } from './errors.js';
+import { ApiError, errors, safeError } from './errors.js';
 import { METRICS } from './metrics.js';
 import { devicesRoutes } from './routes/devices.js';
 import { intakeRoutes } from './routes/intake.js';
@@ -55,20 +55,6 @@ export const AJV_OPTIONS = {
     allErrors: false,
   },
 };
-
-/** The parts of an error that are safe to log (PRD §10.4): no `detail`, `where` or query parameters. */
-export function safeError(err: unknown): { name: string; code?: string; message: string; stack?: string } {
-  if (!(err instanceof Error)) return { name: 'NonError', message: 'a non-Error value was thrown' };
-  const code = (err as { code?: unknown }).code;
-  return {
-    name: err.name,
-    ...(typeof code === 'string' ? { code } : {}),
-    // A database error message can quote the offending value, so it is replaced.
-    message:
-      typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) ? 'database error' : err.message.slice(0, 300),
-    stack: err.stack?.split('\n').slice(1, 12).join('\n'),
-  };
-}
 
 /** Maps ApiError and validation failures to the public error body. Never leaks internals. */
 export function installErrorHandling(app: AnyApp): void {
@@ -142,6 +128,8 @@ export async function buildPublicApp(ctx: AppContext): Promise<PublicApp> {
     loggerInstance: ctx.log as FastifyBaseLogger,
     bodyLimit: 16 * 1024,
     ajv: AJV_OPTIONS,
+    // During shutdown, finish or refuse the connection: the app retries a dropped connection but not a 503.
+    return503OnClosing: false,
     // The edge terminates TLS; the client address comes from CLIENT_IP_HEADER, not from proxy trust.
     trustProxy: false,
   }).withTypeProvider<TypeBoxTypeProvider>();

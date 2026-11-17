@@ -59,7 +59,7 @@ The rule that shapes most decisions here: **never let a caller believe an SOS re
 - **One process, one image.** It runs the public HTTP server, the admin HTTP server (separate port), the delivery worker, the status poller, the policy checker and the purge job. `RUN_JOBS=false` starts the HTTP servers only, so jobs can run as a separate instance.
 - **Postgres is the only stateful dependency.** No Redis, no broker.
 - **The `submissions` table is the delivery queue.** Workers claim rows with `FOR UPDATE SKIP LOCKED`, so two instances are safe.
-- **Uniqueness is enforced by the database:** one submission per device and idempotency key, and one open submission per device (partial unique index).
+- **Uniqueness is enforced by the database:** one submission per device and idempotency key, and one open submission per device, counted separately for real and demo submissions (partial unique index).
 - **All time comes from an injected clock,** so every time-based rule is testable.
 - **Graceful shutdown:** on SIGTERM stop accepting requests, finish the in-flight delivery, exit.
 
@@ -210,7 +210,7 @@ Response 201: `{ "deviceId": "dev_…", "deviceToken": "…", "expiresAt": "…"
 4. Attestation valid → else 403 (see modes, §10.1).
 5. Intake known and enabled → else 404 / 410.
 6. Same device and `Idempotency-Key` seen before → return that submission (replay).
-7. Device already has an open submission → 409.
+7. Device already has an open submission of the same kind (real or demo) → 409. A demo SOS never blocks, or stands in for, a real one.
 8. Phone number not blocked → else 403.
 9. Rate limits (§9.1) → 429, or 503 for the whole-intake breaker.
 10. Intake available (§6.4) → else 503.
@@ -384,7 +384,7 @@ Known gap: the phone number is unverified, so the per-phone limit and phone bloc
 
 ### 10.5 Retention
 - **Submissions** and their status history are hard-deleted 30 days after acceptance by an hourly purge job. No soft delete, no archive.
-- **Devices** are deleted once their token has been expired for 30 days.
+- **Devices** are deleted once their token has been expired for 30 days. **Registration records** (a keyed hash of the registering IP) are deleted after 30 days.
 - **Strikes and blocks** are deleted when they expire. **Nonces** when they expire.
 - **IP addresses** are stored on the submission for abuse investigation and go with it.
 - **Erasure on request:** an admin endpoint deletes all submissions for a phone number or a reference.
@@ -460,7 +460,7 @@ Key indexes: unique `(device_id, idempotency_key)`; unique `reference`; partial 
 | `NODE_ENV`, `PORT`, `ADMIN_PORT`, `HOST` | Runtime. `HOST` defaults to `::`. |
 | `DATABASE_URL` | Postgres |
 | `RUN_JOBS` | `false` to run the HTTP servers only |
-| `CLIENT_IP_HEADER` | Header holding the client address. Unset: use the socket address. On Railway: `x-real-ip`. |
+| `CLIENT_IP_HEADER` | Header holding the client address. On Railway: `x-real-ip`. Required when `NODE_ENV=production`, because behind a proxy every caller would otherwise share one address and one rate limit; `ALLOW_SOCKET_IP_IN_PRODUCTION=true` overrides this for a relay reached directly. |
 | `RESGRID_API_BASE`, `RESGRID_API_KEY`, `RESGRID_API_KEY_EXPIRES_ON` | Core |
 | `RESGRID_CALL_TYPE_NAME`, `RESGRID_PRIORITY_ID` | Call defaults |
 | `INTAKES_FILE` or `INTAKES_JSON` | Path to the intake definitions, or the JSON itself |
