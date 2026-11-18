@@ -71,7 +71,13 @@ Postgres in testcontainers, like the existing suite, and lands as its own commit
 - Regenerate `docs/openapi.json` (auth routes tagged, their own bearer scheme). README and env example list the new settings. `app-api-contract.md` points to the auth contract.
 - An end-to-end test walking every item of the contract's acceptance checklist.
 
+### 9. `POST /v1/auth/signin` (added after review)
+- Without sign-in a user whose session ends can never get back in, so it joined the demo.
+- `validateSignin`: required fields and sign-up's device rules; no email-format or password-length rules (a value that cannot match just fails). Passwords over 1 024 characters fail without hashing.
+- Unknown email still verifies against a fixed dummy Argon2id hash, so both failures cost the same and answer the same `401 invalid_credentials`.
+- Limits: 20/hour per IP in memory; 10/hour per email in `signin_attempts` (migration `005`), by keyed email hash, under an advisory lock. Purged after 1 hour.
+- A new token family per sign-in. Metric `auth_signins_total`.
+
 ## Out of scope
 
-Sign-in (§6 of the contract; its building blocks exist, no route), account ↔ device link, account
-deletion, password reset.
+Account ↔ device link, account deletion, password reset.
