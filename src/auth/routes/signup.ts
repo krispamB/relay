@@ -41,6 +41,7 @@ import type { AppContext } from '../../context.js';
 import { phoneHash, safeEqual } from '../../crypto.js';
 import { type Db, isUniqueViolation } from '../../db/index.js';
 import type { User } from '../../db/types.js';
+import { METRICS } from '../../metrics.js';
 import { type AuthError, authErrors } from '../errors.js';
 import { type AuthKeys, deriveAuthKeys } from '../keys.js';
 import { hashPassword } from '../password.js';
@@ -334,6 +335,7 @@ export async function signupRoutes(app: PublicApp, ctx: AppContext): Promise<voi
     const stored = await findStoredKey(ctx.db, idempotencyKey, ctx.clock.now());
     if (stored) {
       const replay = await answerReplay(ctx, keys, stored, hmac, input);
+      ctx.metrics.inc(METRICS.authSignups, { result: 'replay' });
       req.log.info({ userId: replay.user.id }, 'sign-up replayed');
       return reply.status(201).send(replay);
     }
@@ -347,11 +349,16 @@ export async function signupRoutes(app: PublicApp, ctx: AppContext): Promise<voi
 
     const passwordHash = await hashPassword(input.password);
     let created: SignupResponse;
+    let signupResult: 'created' | 'replay';
     try {
       created = await createAccount(ctx, keys, input, idempotencyKey, hmac, passwordHash);
+      signupResult = 'created';
     } catch (err) {
+      // A lost race answers as the winner's replay (or throws). It did not create this user.
       created = await answerRace(ctx, keys, err, input, idempotencyKey, hmac);
+      signupResult = 'replay';
     }
+    ctx.metrics.inc(METRICS.authSignups, { result: signupResult });
     req.log.info({ userId: created.user.id }, 'user signed up');
     return reply.status(201).send(created);
   });

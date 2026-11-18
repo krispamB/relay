@@ -11,6 +11,7 @@
 import { Type } from '@sinclair/typebox';
 import type { PublicApp } from '../../app.js';
 import type { AppContext } from '../../context.js';
+import { METRICS } from '../../metrics.js';
 import { deriveAuthKeys } from '../keys.js';
 import { authenticate } from '../requireUser.js';
 import { findRefreshTokenOwner, revokeFamily } from '../sessions.js';
@@ -55,6 +56,7 @@ export async function signoutRoutes(app: PublicApp, ctx: AppContext): Promise<vo
       const access = await authenticate(ctx, keys, req, { allowExpired: true, checkFamily: false });
       const body = validateSignoutBody(req.body);
 
+      let signoutResult: 'revoked' | 'noop' = 'noop';
       const owner = await findRefreshTokenOwner(ctx.db, body.refreshToken);
       if (owner && owner.userId === access.userId) {
         const row = await ctx.db
@@ -64,10 +66,11 @@ export async function signoutRoutes(app: PublicApp, ctx: AppContext): Promise<vo
           .executeTakeFirst();
         // now >= expires_at is expired, the same boundary as an access token.
         if (row && ctx.clock.now().getTime() < row.expires_at.getTime()) {
-          await revokeFamily(ctx.db, owner.familyId, ctx.clock.now());
+          if (await revokeFamily(ctx.db, owner.familyId, ctx.clock.now())) signoutResult = 'revoked';
           req.log.info({ userId: access.userId, familyId: owner.familyId }, 'sign-out');
         }
       }
+      ctx.metrics.inc(METRICS.authSignouts, { result: signoutResult });
 
       return reply.status(204).send(null);
     },

@@ -1,4 +1,4 @@
-import { type Logger, pino } from 'pino';
+import { type DestinationStream, type Logger, pino } from 'pino';
 
 export type { Logger };
 
@@ -21,10 +21,29 @@ export const REDACT_PATHS = [
   '*.attestation',
   'integrityToken',
   'attestationObject',
+  // Auth contract §7. Top level and one level down (`*.`); headers are named explicitly.
+  'password',
+  '*.password',
+  'refreshToken',
+  '*.refreshToken',
+  'accessToken',
+  '*.accessToken',
+  'fullName',
+  '*.fullName',
+  'email',
+  '*.email',
+  'phone',
+  '*.phone',
+  'req.headers["idempotency-key"]',
+  'headers["idempotency-key"]',
 ];
 
-export function createLogger(level = 'info'): Logger {
-  return pino({ level, redact: { paths: REDACT_PATHS, censor: '[redacted]' } });
+/** Shared with tests so a buffered logger redacts exactly what production does. */
+export const REDACT_OPTIONS = { paths: REDACT_PATHS, censor: '[redacted]' };
+
+export function createLogger(level = 'info', destination?: DestinationStream): Logger {
+  const options = { level, redact: REDACT_OPTIONS };
+  return destination === undefined ? pino(options) : pino(options, destination);
 }
 
 export function silentLogger(): Logger {

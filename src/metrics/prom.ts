@@ -45,6 +45,9 @@ export function createPromMetrics(): PromMetrics {
   gauge(METRICS.queueDepth, []);
   gauge(METRICS.oldestQueuedAge, []);
   gauge(METRICS.paused, []);
+  counter(METRICS.authSignups, ['result']);
+  counter(METRICS.authRefreshes, ['result']);
+  counter(METRICS.authSignouts, ['result']);
 
   /** Keeps only the declared labels, so a stray label cannot throw or add cardinality. */
   const pick = (allowed: string[], labels?: Labels): Record<string, string> => {

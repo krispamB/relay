@@ -82,12 +82,14 @@ export async function refreshRoutes(app: PublicApp, ctx: AppContext): Promise<vo
         const retryAfterSeconds = perFamily.hit(owner.familyId, ctx.clock.now().getTime());
         if (retryAfterSeconds > 0) {
           ctx.metrics.inc(METRICS.rateLimited, { rule: 'refresh_per_family' });
+          ctx.metrics.inc(METRICS.authRefreshes, { result: 'rate_limited' });
           req.log.warn({ familyId: owner.familyId, result: 'rate_limited' }, 'refresh refused: rate limit');
           throw authErrors.rateLimited(retryAfterSeconds);
         }
       }
 
       const result: RotateResult = await rotateRefreshToken(ctx, keys, refreshToken);
+      ctx.metrics.inc(METRICS.authRefreshes, { result: result.kind });
       req.log.info({ familyId: owner?.familyId, result: result.kind }, 'refresh');
 
       switch (result.kind) {
