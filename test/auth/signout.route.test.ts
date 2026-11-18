@@ -242,3 +242,23 @@ describe('POST /v1/auth/signout', () => {
     });
   });
 });
+
+describe('per-user limit and stale access tokens', () => {
+  it('sign-outs with an old access token do not spend the live session budget', async () => {
+    const { app, ctx } = await setup();
+    await insertUser('user-1');
+    const old = await issue(ctx, 'user-1');
+    await postSignout(app, `Bearer ${old.session.accessToken}`, { refreshToken: old.session.refreshToken });
+    const live = await issue(ctx, 'user-1');
+
+    for (let i = 0; i < 125; i++) {
+      await postSignout(app, `Bearer ${old.session.accessToken}`, { refreshToken: newRefreshToken() });
+    }
+    const me = await app.inject({
+      method: 'GET',
+      url: '/v1/me',
+      headers: { authorization: `Bearer ${live.session.accessToken}` },
+    });
+    expect(me.statusCode).toBe(200);
+  });
+});

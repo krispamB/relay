@@ -21,7 +21,7 @@ export const REDACT_PATHS = [
   '*.attestation',
   'integrityToken',
   'attestationObject',
-  // Auth contract §7. Top level and one level down (`*.`); headers are named explicitly.
+  // Auth contract §7. Top level, one and two levels down (pino has no recursive wildcard); headers named.
   'password',
   '*.password',
   'refreshToken',
@@ -34,6 +34,12 @@ export const REDACT_PATHS = [
   '*.email',
   'phone',
   '*.phone',
+  '*.*.password',
+  '*.*.refreshToken',
+  '*.*.accessToken',
+  '*.*.fullName',
+  '*.*.email',
+  '*.*.phone',
   'req.headers["idempotency-key"]',
   'headers["idempotency-key"]',
 ];

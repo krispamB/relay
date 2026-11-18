@@ -27,8 +27,9 @@
  * - Two different sign-ups for one email or phone: the loser's unique violation becomes `email_taken` or
  *   `phone_taken`, with email first as in the pre-check.
  * - The phone limit is exact under concurrency: counting and recording run under an advisory lock per phone.
- *   Concurrent same-key requests each count as an attempt, because none is a replay yet; the app sends one
- *   request per submission, so that only costs a client that races itself.
+ *   A request that only turns out to be a replay after its attempt was recorded (a same-key twin committed
+ *   first) has that attempt deleted again, so replays never use up the phone's allowance. The in-memory
+ *   per-IP hit is not given back.
  *
  * Logs: the user id only. No body field, header value or token is ever logged.
  */
@@ -151,10 +152,10 @@ async function answerReplay(
  * Counts this phone's attempts in the last 24 h and records a new one, or throws 429. One transaction
  * under an advisory lock on the phone, so concurrent requests cannot both read "2" and both pass.
  */
-async function recordPhoneAttempt(ctx: AppContext, phone: string, now: Date): Promise<void> {
+async function recordPhoneAttempt(ctx: AppContext, phone: string, now: Date): Promise<string> {
   const hash = phoneHash(ctx.config.phoneHashSecret, phone);
   const since = addMs(now, -PHONE_WINDOW_MS);
-  const retryAfterMs = await ctx.db.transaction().execute(async (trx) => {
+  const outcome = await ctx.db.transaction().execute(async (trx) => {
     await sql`SELECT pg_advisory_xact_lock(hashtext(${`signup-phone:${hash}`}))`.execute(trx);
     const recent = await trx
       .selectFrom('signup_phone_attempts')
@@ -166,12 +167,22 @@ async function recordPhoneAttempt(ctx: AppContext, phone: string, now: Date): Pr
     if (recent.length >= PHONE_LIMIT) {
       // Allowed again once fewer than PHONE_LIMIT attempts remain: when this one leaves the window.
       const leaving = recent[recent.length - PHONE_LIMIT]!.created_at;
-      return leaving.getTime() + PHONE_WINDOW_MS - now.getTime();
+      return { retryAfterMs: leaving.getTime() + PHONE_WINDOW_MS - now.getTime(), id: '' };
     }
-    await trx.insertInto('signup_phone_attempts').values({ phone_hash: hash, created_at: now }).execute();
-    return 0;
+    const row = await trx
+      .insertInto('signup_phone_attempts')
+      .values({ phone_hash: hash, created_at: now })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+    return { retryAfterMs: 0, id: row.id };
   });
-  if (retryAfterMs > 0) throw authErrors.rateLimited(retryAfterMs / 1000);
+  if (outcome.retryAfterMs > 0) throw authErrors.rateLimited(outcome.retryAfterMs / 1000);
+  return outcome.id;
+}
+
+/** Contract §5: a replay does not count. Undoes an attempt recorded before the replay was known. */
+async function refundPhoneAttempt(ctx: AppContext, attemptId: string): Promise<void> {
+  await ctx.db.deleteFrom('signup_phone_attempts').where('id', '=', attemptId).execute();
 }
 
 /** The error for an email or phone that already has an account. Email first. */
@@ -342,7 +353,7 @@ export async function signupRoutes(app: PublicApp, ctx: AppContext): Promise<voi
 
     const retryAfter = ipLimiter.hit(clientIp(req, ctx.config.clientIpHeader), ctx.clock.now().getTime());
     if (retryAfter > 0) throw authErrors.rateLimited(retryAfter);
-    await recordPhoneAttempt(ctx, input.phone, ctx.clock.now());
+    const attemptId = await recordPhoneAttempt(ctx, input.phone, ctx.clock.now());
 
     const taken = await findTaken(ctx.db, input.email, input.phone);
     if (taken) {
@@ -351,6 +362,7 @@ export async function signupRoutes(app: PublicApp, ctx: AppContext): Promise<voi
       const committed = await findStoredKey(ctx.db, idempotencyKey, ctx.clock.now());
       if (!committed) throw taken;
       const replay = await answerReplay(ctx, keys, committed, hmac, input);
+      await refundPhoneAttempt(ctx, attemptId);
       ctx.metrics.inc(METRICS.authSignups, { result: 'replay' });
       req.log.info({ userId: replay.user.id }, 'sign-up replayed');
       return reply.status(201).send(replay);
@@ -365,6 +377,7 @@ export async function signupRoutes(app: PublicApp, ctx: AppContext): Promise<voi
     } catch (err) {
       // A lost race answers as the winner's replay (or throws). It did not create this user.
       created = await answerRace(ctx, keys, err, input, idempotencyKey, hmac);
+      await refundPhoneAttempt(ctx, attemptId);
       signupResult = 'replay';
     }
     ctx.metrics.inc(METRICS.authSignups, { result: signupResult });

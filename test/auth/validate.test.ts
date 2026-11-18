@@ -380,3 +380,13 @@ describe.each([
     expect(validate({ refreshToken: '' })).toEqual({ refreshToken: '' });
   });
 });
+
+describe('validateSignup: control characters (Postgres text cannot hold NUL)', () => {
+  it.each([
+    ['fullName', 'Ada\u0000'],
+    ['fullName', 'Ada\u0007Okafor'],
+    ['device.appVersion', '0.3.0\u0000'],
+  ])('%s with a control character is invalid_value', (field, value) => {
+    expect(fieldsOf(withChange(field, value))).toEqual([{ field, code: 'invalid_value' }]);
+  });
+});

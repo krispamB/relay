@@ -23,6 +23,9 @@
 import { UUID_PATTERN } from '../ids.js';
 import { authErrors, type FieldError, type FieldErrorCode } from './errors.js';
 
+/** Unicode control characters (Cc), NUL included. */
+const CONTROL = /\p{Cc}/u;
+
 export interface SignupInput {
   /** Trimmed. */
   fullName: string;
@@ -148,7 +151,8 @@ export function validateSignup(body: unknown): SignupInput {
 
   // Pass 2: the field rules, in the contract's order.
   const c = new Collector();
-  check(c, 'fullName', fullName, textLength(1, 100));
+  // Control characters (NUL above all) cannot be stored in Postgres text and are never a real name.
+  check(c, 'fullName', fullName, (v) => (CONTROL.test(v) ? 'invalid_value' : textLength(1, 100)(v)));
   check(c, 'phone', phone, (v) => (PHONE_PATTERN.test(v) ? undefined : 'invalid_phone'));
   check(c, 'email', email, (v) =>
     length(v) > MAX_EMAIL ? 'too_long' : validEmail(v) ? undefined : 'invalid_email',
@@ -159,7 +163,9 @@ export function validateSignup(body: unknown): SignupInput {
     check(c, 'device.platform', platform, (v) =>
       v === 'ios' || v === 'android' ? undefined : 'invalid_value',
     );
-    check(c, 'device.appVersion', appVersion, (v) => (length(v) <= 32 ? undefined : 'too_long'));
+    check(c, 'device.appVersion', appVersion, (v) =>
+      CONTROL.test(v) ? 'invalid_value' : length(v) <= 32 ? undefined : 'too_long',
+    );
     check(c, 'device.installId', installId, (v) => (UUID.test(v) ? undefined : 'invalid_value'));
   }
   c.unknownFields(body, SIGNUP_FIELDS, '');

@@ -65,3 +65,17 @@ describe('auth log redaction (contract §7)', () => {
     expect(out).toContain('[redacted]');
   });
 });
+
+describe('auth log redaction, two levels down', () => {
+  it('redacts the auth fields inside req.body and err.response.session', () => {
+    const { log, text } = bufferedLogger();
+    log.info(
+      { req: { body: { password: PASSWORD, email: EMAIL, fullName: FULL_NAME, phone: PHONE } } },
+      'deep body',
+    );
+    log.info({ err: { response: { refreshToken: REFRESH, accessToken: ACCESS } } }, 'deep session');
+    const out = text();
+    for (const secret of [PASSWORD, EMAIL, FULL_NAME, PHONE, REFRESH, ACCESS])
+      expect(out).not.toContain(secret);
+  });
+});

@@ -548,6 +548,8 @@ describe('concurrency', () => {
     expect(twinStatus).toBe(201);
     expect(res.statusCode).toBe(201);
     expect(await countRows('users')).toBe(1);
+    // Contract §5: a replay does not count, even one discovered after the attempt was recorded.
+    expect(await countRows('signup_phone_attempts')).toBe(1);
   });
 
   it('identical concurrent requests (same key, same body) → one user, every answer the same user', async () => {

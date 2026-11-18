@@ -85,7 +85,10 @@ export async function authenticate(
     if (family.revoked_at) throw authErrors.sessionRevoked();
   }
 
-  const retryAfterSeconds = limiterFor(ctx).hit(claims.sub, ctx.clock.now().getTime());
+  // Without the family check the token may be old or revoked (sign-out): it gets a bucket of its
+  // own family, so it can never spend the budget of the user's live session.
+  const bucket = options.checkFamily === false ? `family:${claims.fam}` : `user:${claims.sub}`;
+  const retryAfterSeconds = limiterFor(ctx).hit(bucket, ctx.clock.now().getTime());
   if (retryAfterSeconds > 0) {
     req.log.warn({ userId: claims.sub }, 'authenticated request refused: rate limit');
     throw authErrors.rateLimited(retryAfterSeconds);
