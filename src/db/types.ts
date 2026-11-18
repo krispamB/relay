@@ -122,6 +122,54 @@ export interface AlertLogTable {
   last_sent_at: Timestamp;
 }
 
+export interface UsersTable {
+  id: string;
+  full_name: string;
+  phone: string;
+  /** Trimmed and lowercased. */
+  email: string;
+  password_hash: string;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+export interface TokenFamiliesTable {
+  id: string;
+  user_id: string;
+  install_id: string;
+  platform: Platform;
+  app_version: string;
+  created_at: Timestamp;
+  revoked_at: NullableTimestamp;
+}
+
+export interface RefreshTokensTable {
+  id: string;
+  family_id: string;
+  user_id: string;
+  parent_id: ColumnType<string | null, string | null | undefined, string | null>;
+  /** SHA-256 of the token; the token itself is never stored. */
+  token_hash: string;
+  issued_at: Timestamp;
+  expires_at: Timestamp;
+  rotated_at: NullableTimestamp;
+  access_iat: Timestamp;
+  access_exp: Timestamp;
+}
+
+export interface SignupIdempotencyTable {
+  key: string;
+  body_hmac: string;
+  user_id: string;
+  created_at: Timestamp;
+}
+
+export interface SignupPhoneAttemptsTable {
+  id: Generated<string>;
+  phone_hash: string;
+  created_at: Timestamp;
+}
+
 export interface Database {
   devices: DevicesTable;
   device_registrations: DeviceRegistrationsTable;
@@ -132,6 +180,11 @@ export interface Database {
   blocks: BlocksTable;
   relay_state: RelayStateTable;
   alert_log: AlertLogTable;
+  users: UsersTable;
+  token_families: TokenFamiliesTable;
+  refresh_tokens: RefreshTokensTable;
+  signup_idempotency: SignupIdempotencyTable;
+  signup_phone_attempts: SignupPhoneAttemptsTable;
 }
 
 export type Device = Selectable<DevicesTable>;
@@ -140,3 +193,4 @@ export type NewSubmission = Insertable<SubmissionsTable>;
 export type SubmissionUpdate = Updateable<SubmissionsTable>;
 export type RelayStateRow = Selectable<RelayStateTable>;
 export type Block = Selectable<BlocksTable>;
+export type User = Selectable<UsersTable>;

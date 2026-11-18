@@ -50,6 +50,12 @@ export interface Config {
   };
   statusTokenSecret: string;
   phoneHashSecret: string;
+  /** Sign-up, sign-in and the session. Off by default: no auth route is mounted. */
+  auth: {
+    enabled: boolean;
+    /** At least 32 bytes when enabled; '' when disabled. */
+    tokenSecret: string;
+  };
   adminToken: string;
   alertWebhookUrl: string | undefined;
   demoDispatchAfterS: number;
@@ -206,6 +212,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     problems.push('ALERT_WEBHOOK_URL must be an http(s) URL');
   }
 
+  const authEnabled = bool('AUTH_ENABLED', false);
+
   const config: Config = {
     nodeEnv,
     host: get('HOST') ?? '::',
@@ -228,6 +236,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     statusTokenSecret: secret('STATUS_TOKEN_SECRET'),
     phoneHashSecret: secret('PHONE_HASH_SECRET'),
     adminToken: secret('ADMIN_TOKEN'),
+    auth: { enabled: authEnabled, tokenSecret: authEnabled ? secret('AUTH_TOKEN_SECRET') : '' },
     alertWebhookUrl,
     demoDispatchAfterS: int('DEMO_DISPATCH_AFTER_S', 30, 1),
     demoCloseAfterS: int('DEMO_CLOSE_AFTER_S', 90, 1),

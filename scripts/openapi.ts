@@ -54,6 +54,7 @@ function standInConfig(): Config {
     statusTokenSecret: 'unused',
     phoneHashSecret: 'unused',
     adminToken: 'unused',
+    auth: { enabled: false, tokenSecret: '' },
     alertWebhookUrl: undefined,
     demoDispatchAfterS: 30,
     demoCloseAfterS: 90,
