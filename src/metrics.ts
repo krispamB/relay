@@ -27,6 +27,14 @@ export const METRICS = {
   oldestQueuedAge: 'sos_oldest_queued_age_seconds',
   /** gauge 0|1 */
   paused: 'sos_delivery_paused',
+  /** counter {result: created|replay} */
+  authSignups: 'auth_signups_total',
+  /** counter {result: rotated|grace|reuse_detected|revoked|invalid|rate_limited} */
+  authRefreshes: 'auth_refreshes_total',
+  /** counter {result: revoked|noop} */
+  authSignouts: 'auth_signouts_total',
+  /** counter {result: success|invalid_credentials|rate_limited} */
+  authSignins: 'auth_signins_total',
 } as const;
 
 export type MetricName = (typeof METRICS)[keyof typeof METRICS];

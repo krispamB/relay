@@ -9,6 +9,7 @@ import Fastify, {
   type RawServerDefault,
 } from 'fastify';
 import { sql } from 'kysely';
+import { authPlugin } from './auth/plugin.js';
 import { MINUTE } from './clock.js';
 import type { AppContext } from './context.js';
 import { ApiError, errors, safeError } from './errors.js';
@@ -118,6 +119,11 @@ export class WindowLimiter {
     if (entry.count <= this.max) return 0;
     return Math.max(1, Math.ceil((entry.windowStart + this.windowMs - nowMs) / 1000));
   }
+  /** Gives back one hit counted in the current window (for a request that turned out not to count). */
+  refund(key: string, nowMs: number): void {
+    const entry = this.hits.get(key);
+    if (entry && nowMs - entry.windowStart < this.windowMs && entry.count > 0) entry.count -= 1;
+  }
   private sweep(nowMs: number): void {
     for (const [k, v] of this.hits) if (nowMs - v.windowStart >= this.windowMs) this.hits.delete(k);
   }
@@ -141,7 +147,13 @@ export async function buildPublicApp(ctx: AppContext): Promise<PublicApp> {
     openapi: {
       info: { title: 'SOS Relay public API', version: '1.0.0' },
       components: {
-        securitySchemes: { deviceToken: { type: 'http', scheme: 'bearer' } },
+        securitySchemes: {
+          deviceToken: { type: 'http', scheme: 'bearer' },
+          // The auth endpoints' own bearer token, never accepted in place of a device token.
+          ...(ctx.config.auth.enabled
+            ? { accessToken: { type: 'http' as const, scheme: 'bearer', bearerFormat: 'JWT' } }
+            : {}),
+        },
       },
     },
   });
@@ -171,6 +183,9 @@ export async function buildPublicApp(ctx: AppContext): Promise<PublicApp> {
   await devicesRoutes(app, ctx);
   await sosRoutes(app, ctx);
   await statusRoutes(app, ctx);
+
+  // Encapsulated: its own error handler. Registered after the per-IP limiter hook, which it inherits.
+  if (ctx.config.auth.enabled) await app.register(authPlugin, { ctx });
 
   return app;
 }

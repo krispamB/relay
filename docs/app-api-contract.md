@@ -8,12 +8,14 @@ examples were captured from the running relay, not written by hand. Values that 
 tokens, nonces) will differ in your runs. If this document and the relay disagree, the relay is
 right and this document has a bug: tell the relay team.
 
-Two companion files:
+Three companion files:
 
 - [`docs/attestation-contract.md`](attestation-contract.md): exactly how to produce the Play
   Integrity and App Attest values on each platform. This document does not repeat it.
 - [`docs/openapi.json`](openapi.json): the machine-readable schema of the same endpoints (see
   [OpenAPI document](#openapi-document)), for generating a typed client.
+- [`docs/auth-contract.md`](auth-contract.md): the sign-up and session endpoints of the demo app
+  (`/v1/auth/*`, `/v1/me`). They use their own error codes, not the ones in this document.
 
 ## Contents
 

@@ -8,6 +8,7 @@ The relay is the only server the public SOS mobile app talks to. It checks that 
 | [`integration.md`](integration.md) | The contract with Resgrid Core: endpoints, auth, errors, the Core-side setup (section 10) and the live test checklist (section 11). Wins over the PRD on anything about Core. |
 | [`docs/app-api-contract.md`](docs/app-api-contract.md) | **For the app team:** every endpoint the app uses, what to send, every answer and what to do with it, retries, limits. The OpenAPI document is [`docs/openapi.json`](docs/openapi.json) (served at `/v1/openapi.json`; regenerate with `npm run openapi`). |
 | [`docs/attestation-contract.md`](docs/attestation-contract.md) | What the app must send so the relay can verify an install (Play Integrity, App Attest). |
+| [`docs/auth-contract.md`](docs/auth-contract.md) | **For the demo app:** sign-up, sessions, `GET /v1/me`, with their own error codes. Built behind `AUTH_ENABLED`; see [Auth (demo app)](#auth-demo-app). Plan: [`docs/auth-implementation-plan.md`](docs/auth-implementation-plan.md). |
 
 Also: [`sos-app-PRD.md`](sos-app-PRD.md) (the app), [`mock-core/README.md`](mock-core/README.md) (the mock Core and its `/__control` endpoints), [`.env.example`](.env.example) (every setting).
 
@@ -96,6 +97,7 @@ npm run format           # biome check --write .
 npm test                 # vitest run
 npm run mock-core        # mock Core on :4010 (PORT, MOCK_CORE_API_KEY override)
 npm run openapi          # regenerate docs/openapi.json after changing a route schema (a test fails if it is stale)
+npm run test:auth-on     # the whole suite with the auth plugin mounted (see below)
 npm run migrate:dev      # apply migrations to DATABASE_URL
 npm run dev              # relay with file watching (reads the environment; see .env.example)
 npm run build && npm start   # compiled build, as in the Docker image
@@ -106,6 +108,8 @@ npm run build && npm start   # compiled build, as in the Docker image
 ```sh
 TEST_DATABASE_URL=postgres://user:pass@localhost:5432/relay_test npm test
 ```
+
+**The suite with auth on.** Tests build their config with `testConfig()` (`test/helpers/context.ts`), where `auth.enabled` follows `TEST_AUTH_ENABLED` (default off). `npm run test:auth-on` (that is, `TEST_AUTH_ENABLED=true npm test`) runs every existing test with the auth plugin mounted and expectations unchanged, which shows the SOS routes behave the same beside it. Tests whose subject is auth on or off (`test/auth/plugin.test.ts`, `test/auth/isolation.test.ts`, the OpenAPI and e2e auth tests) set `auth.enabled` themselves, so they do not depend on the switch; `test/auth/isolation.test.ts` also runs a short SOS walk with auth on in the default run.
 
 `test/e2e/` wires the real public app, the real Core client, the mock Core and Postgres together; only attestation and the clock are fake. `npx vitest run test/e2e` runs just those.
 
@@ -121,9 +125,20 @@ TEST_DATABASE_URL=postgres://user:pass@localhost:5432/relay_test npm test
 | `INTAKES_JSON` or `INTAKES_FILE` | The intakes (see `intakes.example.json`). `INTAKES_JSON` wins when both are set. |
 | `ATTESTATION_MODE` | `enforce` (default) or `permissive`. The process refuses `permissive` when `NODE_ENV=production` unless `ALLOW_PERMISSIVE_IN_PRODUCTION=true`. Never run permissive on a public relay. |
 | `STATUS_TOKEN_SECRET`, `PHONE_HASH_SECRET`, `ADMIN_TOKEN` | At least 32 bytes each (`openssl rand -hex 32`). Changing the first invalidates every status token already handed out; changing the second orphans existing phone strikes and blocks. |
+| `AUTH_ENABLED`, `AUTH_TOKEN_SECRET` | `AUTH_ENABLED` (default `false`) mounts the demo app's auth routes ([Auth (demo app)](#auth-demo-app)); off, they do not exist and the relay behaves as before. `AUTH_TOKEN_SECRET` is required when auth is on, at least 32 bytes (`openssl rand -hex 32`). It signs access tokens and derives refresh tokens: changing it signs every user out. |
 | `CLIENT_IP_HEADER` | Header holding the caller's address. Unset locally. On Railway: `x-real-ip`. Wrong value means every caller shares one IP and the per-IP limits misfire. |
 | `ALERT_WEBHOOK_URL` | Where alerts go. Unset means alerts are only logged. |
 | `RUN_JOBS` | `false` runs the HTTP servers only (jobs elsewhere). |
+
+## Auth (demo app)
+
+The demo app signs users up and keeps them signed in. It sends no SOS. The endpoints are `POST /v1/auth/signup`, `POST /v1/auth/signin`, `POST /v1/auth/refresh`, `POST /v1/auth/signout` and `GET /v1/me`, specified in [`docs/auth-contract.md`](docs/auth-contract.md) (the contract; its section 7 is the acceptance checklist, walked by `test/e2e/auth.e2e.test.ts`) and built as in [`docs/auth-implementation-plan.md`](docs/auth-implementation-plan.md). They are off unless `AUTH_ENABLED=true`, and need `AUTH_TOKEN_SECRET`. Sign-in returns a new session for an existing account: 20 attempts per hour per client IP and 10 per hour per email address.
+
+- **Separate from SOS.** An access token (15 minutes) is never accepted on the SOS routes, and a device token is never accepted on the auth routes. An account and a registered device are not linked.
+- **Own error codes.** The auth endpoints answer with the codes in the auth contract; the SOS routes keep the ones in the app API contract.
+- **Migration.** `migrations/004_auth.sql` and `migrations/005_signin_attempts.sql` run with the others, whether or not auth is on.
+- **OpenAPI.** `docs/openapi.json` documents the auth routes (tag `auth`, security scheme `accessToken`, next to `deviceToken`). A relay with `AUTH_ENABLED=false` serves the same document without them.
+- **Data retention.** Accounts are **not** purged: every demo account is deleted by an operator before a public release (contract section 8). The purge job deletes refresh tokens 7 days after they expire or are revoked, sign-up idempotency records and phone attempt records 24 hours after they are created, and sign-in attempt records 1 hour after they are created. SOS data keeps its 30 days.
 
 ## Deploying on Railway
 
@@ -217,7 +232,7 @@ One outbound webhook (`ALERT_WEBHOOK_URL`); body `{severity, code, text, referen
 
 ### Metrics
 
-`GET /metrics` on the admin port (Prometheus text format), behind the admin token. Counters: submissions by outcome, Core calls by endpoint and result, attestation results, rate-limit refusals by rule. Histograms: Core latency and `POST /v1/sos` latency. Gauges: `sos_queue_depth`, `sos_oldest_queued_age_seconds`, `sos_delivery_paused`. Metrics and logs carry no phone number, name, coordinate or free text.
+`GET /metrics` on the admin port (Prometheus text format), behind the admin token. Counters: submissions by outcome, Core calls by endpoint and result, attestation results, rate-limit refusals by rule, and with auth on `auth_signups_total` (created, replay), `auth_signins_total` (success, invalid_credentials, rate_limited), `auth_refreshes_total` (rotated, grace, reuse_detected, revoked, invalid, rate_limited) and `auth_signouts_total` (revoked, noop). Histograms: Core latency and `POST /v1/sos` latency. Gauges: `sos_queue_depth`, `sos_oldest_queued_age_seconds`, `sos_delivery_paused`. Metrics and logs carry no phone number, name, coordinate or free text.
 
 ## Before go-live
 

@@ -1,6 +1,16 @@
 /**
- * Retention purge. sos-relay-PRD.md §10.5. Hourly, hard deletes, in small batches so no pass holds a
- * long lock. Logs counts only.
+ * Retention purge. sos-relay-PRD.md §10.5 and docs/auth-contract.md §8. Hourly, hard deletes, in small
+ * batches so no pass holds a long lock. Logs counts only. Users are never deleted.
+ *
+ * Auth token families (the safe rule): a family is deleted only when it has no refresh_token rows
+ * left, and only if it was revoked more than 7 days ago or created more than 7 days ago. Tokens are
+ * removed first — those whose expires_at is more than 7 days ago, and every token of a family revoked
+ * more than 7 days ago — so a family that still holds a token, including an unexpired one, is kept.
+ * An empty family younger than 7 days and not revoked that long ago is kept too. The "created more
+ * than 7 days ago and empty" clause is what removes a family whose newest token expired more than 7
+ * days ago: that token is gone, and a 90-day token lifetime means the family is far older than 7 days.
+ * A row exactly on a cutoff (7 days, 24 hours for sign-up records, 1 hour for sign-in attempts)
+ * is kept; only older rows go.
  */
 
 import { DAY, HOUR } from '../clock.js';
@@ -11,6 +21,12 @@ export const PURGE_INTERVAL_MS = HOUR;
 export const SUBMISSION_RETENTION_MS = 30 * DAY;
 export const DEVICE_RETENTION_AFTER_EXPIRY_MS = 30 * DAY;
 export const ALERT_LOG_RETENTION_MS = DAY;
+/** Auth contract §8. Expired tokens, and tokens of a family revoked this long ago. */
+export const AUTH_TOKEN_RETENTION_MS = 7 * DAY;
+/** Auth contract §8. Sign-up idempotency rows and per-phone attempt rows. */
+export const AUTH_SIGNUP_RETENTION_MS = DAY;
+/** Sign-in attempts are only needed for the 1-hour per-email limit (contract §6). */
+export const AUTH_SIGNIN_ATTEMPT_RETENTION_MS = HOUR;
 /** Rows per DELETE statement; each statement is its own short transaction. */
 export const PURGE_BATCH = 500;
 /** Upper bound on statements per table per pass; the next hour continues. */
@@ -24,6 +40,11 @@ export interface PurgeCounts {
   blocks: number;
   nonces: number;
   alertLog: number;
+  refreshTokens: number;
+  tokenFamilies: number;
+  signupIdempotency: number;
+  signupPhoneAttempts: number;
+  signinAttempts: number;
 }
 
 export function createPurgeJob(ctx: AppContext): Job {
@@ -59,6 +80,9 @@ export async function runPurgePass(ctx: AppContext): Promise<PurgeCounts> {
   const submissionCutoff = new Date(now.getTime() - SUBMISSION_RETENTION_MS);
   const deviceCutoff = new Date(now.getTime() - DEVICE_RETENTION_AFTER_EXPIRY_MS);
   const alertCutoff = new Date(now.getTime() - ALERT_LOG_RETENTION_MS);
+  const tokenCutoff = new Date(now.getTime() - AUTH_TOKEN_RETENTION_MS);
+  const signupCutoff = new Date(now.getTime() - AUTH_SIGNUP_RETENTION_MS);
+  const signinCutoff = new Date(now.getTime() - AUTH_SIGNIN_ATTEMPT_RETENTION_MS);
 
   // Postgres has no DELETE ... LIMIT, so each batch is DELETE ... WHERE key IN (SELECT key ... LIMIT n).
   const counts: PurgeCounts = {
@@ -175,6 +199,122 @@ export async function runPurgePass(ctx: AppContext): Promise<PurgeCounts> {
               .selectFrom('alert_log')
               .select('code')
               .where('last_sent_at', '<', alertCutoff)
+              .limit(PURGE_BATCH),
+          )
+          .executeTakeFirst(),
+      ),
+    ),
+    // Expired tokens first, then every token of a family revoked more than 7 days ago. A token that
+    // matches both is counted once. Families are considered only after these deletes.
+    refreshTokens:
+      (await inBatches(async () =>
+        count(
+          await db
+            .deleteFrom('refresh_tokens')
+            .where(
+              'id',
+              'in',
+              db
+                .selectFrom('refresh_tokens')
+                .select('id')
+                .where('expires_at', '<', tokenCutoff)
+                .limit(PURGE_BATCH),
+            )
+            .executeTakeFirst(),
+        ),
+      )) +
+      (await inBatches(async () =>
+        count(
+          await db
+            .deleteFrom('refresh_tokens')
+            .where(
+              'id',
+              'in',
+              db
+                .selectFrom('refresh_tokens')
+                .select('id')
+                .where(
+                  'family_id',
+                  'in',
+                  db
+                    .selectFrom('token_families')
+                    .select('id')
+                    .where('revoked_at', 'is not', null)
+                    .where('revoked_at', '<', tokenCutoff),
+                )
+                .limit(PURGE_BATCH),
+            )
+            .executeTakeFirst(),
+        ),
+      )),
+    tokenFamilies: await inBatches(async () =>
+      count(
+        await db
+          .deleteFrom('token_families')
+          .where(
+            'id',
+            'in',
+            db
+              .selectFrom('token_families')
+              .select('id')
+              .where((eb) => eb.or([eb('revoked_at', '<', tokenCutoff), eb('created_at', '<', tokenCutoff)]))
+              .where(({ not, exists, selectFrom }) =>
+                not(
+                  exists(
+                    selectFrom('refresh_tokens')
+                      .select('refresh_tokens.id')
+                      .whereRef('refresh_tokens.family_id', '=', 'token_families.id'),
+                  ),
+                ),
+              )
+              .limit(PURGE_BATCH),
+          )
+          .executeTakeFirst(),
+      ),
+    ),
+    signupIdempotency: await inBatches(async () =>
+      count(
+        await db
+          .deleteFrom('signup_idempotency')
+          .where(
+            'key',
+            'in',
+            db
+              .selectFrom('signup_idempotency')
+              .select('key')
+              .where('created_at', '<', signupCutoff)
+              .limit(PURGE_BATCH),
+          )
+          .executeTakeFirst(),
+      ),
+    ),
+    signupPhoneAttempts: await inBatches(async () =>
+      count(
+        await db
+          .deleteFrom('signup_phone_attempts')
+          .where(
+            'id',
+            'in',
+            db
+              .selectFrom('signup_phone_attempts')
+              .select('id')
+              .where('created_at', '<', signupCutoff)
+              .limit(PURGE_BATCH),
+          )
+          .executeTakeFirst(),
+      ),
+    ),
+    signinAttempts: await inBatches(async () =>
+      count(
+        await db
+          .deleteFrom('signin_attempts')
+          .where(
+            'id',
+            'in',
+            db
+              .selectFrom('signin_attempts')
+              .select('id')
+              .where('created_at', '<', signinCutoff)
               .limit(PURGE_BATCH),
           )
           .executeTakeFirst(),

@@ -3,6 +3,8 @@
  *
  * The public app is built with a stand-in context: building the routes needs the configuration's
  * shape, never a database, Core or attestation. Nothing here connects anywhere.
+ * Auth is switched ON in the stand-in, so docs/openapi.json documents the whole API, auth routes
+ * included. A relay running with AUTH_ENABLED=false serves the same document without them.
  * Used by scripts/export-openapi.ts (writes docs/openapi.json) and by test/docs/openapi.test.ts
  * (fails when the committed file is out of date).
  */
@@ -54,6 +56,8 @@ function standInConfig(): Config {
     statusTokenSecret: 'unused',
     phoneHashSecret: 'unused',
     adminToken: 'unused',
+    // On, so the auth routes are in the document. The secret is never used: no token is signed here.
+    auth: { enabled: true, tokenSecret: 'unused-while-rendering-the-openapi-document' },
     alertWebhookUrl: undefined,
     demoDispatchAfterS: 30,
     demoCloseAfterS: 90,

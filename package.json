@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "scripts": {
     "test": "vitest run",
+    "test:auth-on": "TEST_AUTH_ENABLED=true vitest run",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/src/main.js",
     "dev": "tsx watch src/main.ts",
@@ -26,6 +27,7 @@
   "dependencies": {
     "@fastify/swagger": "^9.9.5",
     "@fastify/type-provider-typebox": "^6.3.0",
+    "@node-rs/argon2": "^2.2.2",
     "@sinclair/typebox": "^0.34.52",
     "cbor-x": "^1.6.9",
     "fastify": "^5.12.8",

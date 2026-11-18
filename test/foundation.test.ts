@@ -54,6 +54,36 @@ describe('config', () => {
     expect(() => loadConfig({ ...prod, ALLOW_SOCKET_IP_IN_PRODUCTION: 'true' })).not.toThrow();
   });
 
+  it('leaves auth off by default, with no secret needed', () => {
+    expect(loadConfig(baseEnv).auth).toEqual({ enabled: false, tokenSecret: '' });
+    expect(loadConfig({ ...baseEnv, AUTH_ENABLED: 'false' }).auth.enabled).toBe(false);
+  });
+
+  it('refuses auth on without a token secret of at least 32 bytes', () => {
+    const on = { ...baseEnv, AUTH_ENABLED: 'true' };
+    expect(() => loadConfig(on)).toThrow(/AUTH_TOKEN_SECRET is required/);
+    expect(() => loadConfig({ ...on, AUTH_TOKEN_SECRET: 'x'.repeat(31) })).toThrow(
+      /AUTH_TOKEN_SECRET must be at least 32 bytes/,
+    );
+    expect(loadConfig({ ...on, AUTH_TOKEN_SECRET: 'x'.repeat(32) }).auth).toEqual({
+      enabled: true,
+      tokenSecret: 'x'.repeat(32),
+    });
+  });
+
+  it('rejects a bad AUTH_ENABLED value', () => {
+    expect(() => loadConfig({ ...baseEnv, AUTH_ENABLED: 'yes' })).toThrow(
+      /AUTH_ENABLED must be "true" or "false"/,
+    );
+  });
+
+  it('does not check the auth secret while auth is off', () => {
+    expect(loadConfig({ ...baseEnv, AUTH_TOKEN_SECRET: 'short' }).auth).toEqual({
+      enabled: false,
+      tokenSecret: '',
+    });
+  });
+
   it('needs platform settings in enforce mode', () => {
     expect(() => loadConfig({ ...baseEnv, ATTESTATION_MODE: 'enforce' })).toThrow(/enforce/);
     expect(() =>
