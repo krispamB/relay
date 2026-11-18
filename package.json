@@ -26,6 +26,7 @@
   "dependencies": {
     "@fastify/swagger": "^9.9.5",
     "@fastify/type-provider-typebox": "^6.3.0",
+    "@node-rs/argon2": "^2.2.2",
     "@sinclair/typebox": "^0.34.52",
     "cbor-x": "^1.6.9",
     "fastify": "^5.12.8",
