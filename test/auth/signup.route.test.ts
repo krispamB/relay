@@ -663,3 +663,20 @@ describe('logs', () => {
     }
   });
 });
+
+describe('limit refusals do not count', () => {
+  it('a request refused by the per-phone limit does not use up the per-IP budget', async () => {
+    const { app } = await setup();
+    const ip = '198.51.100.88';
+    const phone = '+2348030000999';
+    // Three counted attempts for one phone: one account, two 409s.
+    expect((await signup(app, bodyFor(1, { phone }), { ip })).statusCode).toBe(201);
+    expect((await signup(app, bodyFor(2, { phone }), { ip })).statusCode).toBe(409);
+    expect((await signup(app, bodyFor(3, { phone }), { ip })).statusCode).toBe(409);
+    expect((await signup(app, bodyFor(4, { phone }), { ip })).statusCode).toBe(429);
+    // 3 counted from this IP: 2 more are allowed before the per-IP limit of 5.
+    expect((await signup(app, bodyFor(5), { ip })).statusCode).toBe(201);
+    expect((await signup(app, bodyFor(6), { ip })).statusCode).toBe(201);
+    expect((await signup(app, bodyFor(7), { ip })).statusCode).toBe(429);
+  });
+});

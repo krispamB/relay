@@ -302,7 +302,7 @@ what slows down checking which emails and phones have accounts). A `400`, a `422
 a limit do not count, and neither do idempotent replays ([4.1](#41-post-v1authsignup)), including a request
 that only turns out to be a replay while it is being handled. The per-IP limit is checked before the
 per-phone one. Every `429` includes `retryAfterSeconds`; for the per-phone limit it is the time until an
-attempt leaves the 24-hour window.
+attempt leaves the 24-hour window. A request refused by the per-phone limit gives back its per-IP hit.
 
 The per-IP, per-family and per-user limits are kept in each relay instance's memory: with two instances
 behind the edge they are effectively doubled, and a restart resets them. The per-phone limit is kept in
@@ -349,6 +349,17 @@ the database (by a keyed hash of the address, never the address itself), so it h
 instances and restarts, and it applies even when the email has no account. An attempt refused by a limit
 is not counted, so waiting is enough: the next attempt works once the oldest counted one is an hour old.
 The `message` of `invalid_credentials` is always "The email or password is not correct."
+
+**Known trade-offs (accepted for the demo):**
+
+- **Lock-out by guessing.** Anyone who knows a user's email can make 10 attempts an hour and keep the real
+  user from signing in for that hour, from any number of IPs. Successful attempts count too. This is the
+  price of a per-email limit that cannot be bypassed by switching IPs; revisit it before a public release
+  (for example with a per-email-and-IP limit, or a CAPTCHA after failures).
+- **IPv6 and the per-IP limits.** The per-IP limits key on the full client address, so a caller with an
+  IPv6 range has many addresses. Each accepted sign-in costs one password check (about 19 MiB and 12 ms).
+  Grouping IPv6 addresses by /64 is the fix if the edge passes IPv6 client addresses through. Sign-up has
+  the same exposure.
 
 ---
 

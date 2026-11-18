@@ -91,7 +91,11 @@ async function authenticatedUser(
   password: string,
   dummy: string,
 ): Promise<User | undefined> {
-  const user = await ctx.db.selectFrom('users').selectAll().where('email', '=', email).executeTakeFirst();
+  // Postgres text cannot hold NUL, so such an address cannot have an account: skip the lookup (it would
+  // fail) but still pay for one verification, so the answer and its timing match any unknown email.
+  const user = email.includes('\u0000')
+    ? undefined
+    : await ctx.db.selectFrom('users').selectAll().where('email', '=', email).executeTakeFirst();
   if (characterLength(password) > SIGNIN_PASSWORD_MAX_CHARS) return undefined;
   const ok = await verifyPassword(user?.password_hash ?? dummy, password);
   return user && ok ? user : undefined;
@@ -178,6 +182,8 @@ export async function signinRoutes(app: PublicApp, ctx: AppContext): Promise<voi
       now,
     );
     if (emailRetry > 0) {
+      // Contract §6: an attempt refused by a limit is not counted, by either limit.
+      ipLimiter.refund(ip, now.getTime());
       ctx.metrics.inc(METRICS.authSignins, { result: 'rate_limited' });
       req.log.info({ result: 'rate_limited' }, 'sign-in refused');
       throw authErrors.rateLimited(emailRetry);
@@ -190,7 +196,18 @@ export async function signinRoutes(app: PublicApp, ctx: AppContext): Promise<voi
       throw authErrors.invalidCredentials();
     }
 
-    const { session } = await issueSession(ctx.db, keys, { userId: user.id, device: input.device, now });
+    // One transaction: a family is never left without its token, and a user deleted meanwhile fails cleanly.
+    let session: Session;
+    try {
+      ({ session } = await ctx.db
+        .transaction()
+        .execute((trx) => issueSession(trx, keys, { userId: user.id, device: input.device, now })));
+    } catch (err) {
+      if ((err as { code?: unknown }).code !== '23503') throw err;
+      ctx.metrics.inc(METRICS.authSignins, { result: 'invalid_credentials' });
+      req.log.info({ result: 'invalid_credentials' }, 'sign-in refused: user deleted meanwhile');
+      throw authErrors.invalidCredentials();
+    }
     ctx.metrics.inc(METRICS.authSignins, { result: 'success' });
     req.log.info({ userId: user.id }, 'user signed in');
     const body: { user: UserBody; session: Session } = { user: userBody(user), session };

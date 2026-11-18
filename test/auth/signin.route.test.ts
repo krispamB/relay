@@ -4,7 +4,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
-import { sql } from 'kysely';
+import { type KyselyPlugin, sql } from 'kysely';
 import { type Logger, pino } from 'pino';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildPublicApp } from '../../src/app.js';
@@ -475,5 +475,76 @@ describe('logs', () => {
     expect(out).not.toContain(email);
     expect(out).not.toContain(password);
     expect(out).not.toContain(wrong);
+  });
+});
+
+describe('review fixes', () => {
+  it('an unknown email still runs exactly one password verification', async () => {
+    const { app } = await setup();
+    const spy = vi.spyOn(password, 'verifyPassword');
+    const res = await signin(app, signinBody('nobody@example.com', PASSWORD));
+    expect(res.statusCode).toBe(401);
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
+  it('an email with a NUL character is 401 invalid_credentials, not 500, and is still verified', async () => {
+    const { app } = await setup();
+    const spy = vi.spyOn(password, 'verifyPassword');
+    const res = await signin(app, signinBody('a\u0000@example.com', PASSWORD));
+    expect(res.statusCode).toBe(401);
+    expect(res.json().error.code).toBe('invalid_credentials');
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
+  it('a request refused by the per-email limit does not use up the per-IP budget', async () => {
+    const { app } = await setup();
+    const ip = '198.51.100.77';
+    for (let i = 0; i < 10; i++) await signin(app, signinBody('victim@example.com', 'wrong'), { ip });
+    for (let i = 0; i < 10; i++) {
+      expect((await signin(app, signinBody('victim@example.com', 'wrong'), { ip })).statusCode).toBe(429);
+    }
+    // 10 counted from this IP so far: 10 more are allowed before the per-IP limit of 20.
+    for (let i = 0; i < 10; i++) {
+      expect((await signin(app, signinBody(`other${i}@example.com`, 'wrong'), { ip })).statusCode).toBe(401);
+    }
+    expect((await signin(app, signinBody('one-more@example.com', 'wrong'), { ip })).statusCode).toBe(429);
+  });
+  it('a user deleted between the lookup and the session insert is 401, and leaves no session behind', async () => {
+    const { app: plain } = await setup();
+    expect((await signup(plain, signupBody(1))).statusCode).toBe(201);
+    await testDb().deleteFrom('token_families').execute();
+
+    let deleted = false;
+    const userLookups = new WeakSet<object>();
+    const deleteAfterLookup: KyselyPlugin = {
+      transformQuery: (args) => {
+        const n = args.node;
+        if (n.kind === 'SelectQueryNode' && JSON.stringify(n.from).includes('"users"'))
+          userLookups.add(args.queryId);
+        return n;
+      },
+      transformResult: async (args) => {
+        if (!deleted && userLookups.has(args.queryId) && args.result.rows.length === 1) {
+          deleted = true;
+          await testDb().deleteFrom('users').execute();
+        }
+        return args.result;
+      },
+    };
+    const base = testConfig();
+    const ctx = createTestContext({
+      db: testDb().withPlugin(deleteAfterLookup),
+      config: { ...base, auth: { enabled: true, tokenSecret: AUTH_SECRET } },
+    });
+    const app = await buildPublicApp(ctx);
+    open.push(app);
+
+    const res = await signin(app, signinBody('user1@example.com', PASSWORD));
+    expect(deleted).toBe(true);
+    expect(res.statusCode).toBe(401);
+    expect(res.json().error.code).toBe('invalid_credentials');
+    expect(await countRows('token_families')).toBe(0);
   });
 });

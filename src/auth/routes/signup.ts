@@ -353,7 +353,14 @@ export async function signupRoutes(app: PublicApp, ctx: AppContext): Promise<voi
     const ip = clientIp(req, ctx.config.clientIpHeader);
     const retryAfter = ipLimiter.hit(ip, ctx.clock.now().getTime());
     if (retryAfter > 0) throw authErrors.rateLimited(retryAfter);
-    const attemptId = await recordPhoneAttempt(ctx, input.phone, ctx.clock.now());
+    let attemptId: string;
+    try {
+      attemptId = await recordPhoneAttempt(ctx, input.phone, ctx.clock.now());
+    } catch (err) {
+      // Contract §5: a request refused by a limit does not count, so the per-IP hit is given back.
+      ipLimiter.refund(ip, ctx.clock.now().getTime());
+      throw err;
+    }
     /**
      * Contract §5: a replay and a 422 do not count. When either only shows up after the request was
      * counted (a same-key twin committed meanwhile), give back the IP hit and the phone attempt.
