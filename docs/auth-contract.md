@@ -5,9 +5,10 @@ backend are built against it at the same time. Until the backend is ready, the a
 that implements this contract, so the backend must match it exactly. If a change is needed, change this
 document first, and change the app and the backend together.
 
-For the demo, only **sign-up** must work end to end. The app also uses refresh, sign-out and `GET /v1/me`
-to keep the session alive. Sign-in is specified in [section 6](#6-later-sign-in) so it can be built, but
-the app does not call it yet.
+For the demo, **sign-up** and **sign-in** must work end to end. The app also uses refresh, sign-out and
+`GET /v1/me` to keep the session alive. Sign-in ([section 6](#6-sign-in)) is how a user gets back into
+their account after a session ends: there is no other way back, since signing up again with the same
+email or phone is refused.
 
 The demo app **sends no SOS**. It does not call the relay's SOS endpoints (`/v1/intake`, `/v1/devices/*`,
 `/v1/sos`), which stay deployed and unchanged, as described in [`app-api-contract.md`](app-api-contract.md).
@@ -25,7 +26,7 @@ together with sending an SOS from a signed-in app ([section 8](#8-not-in-the-dem
    - [`POST /v1/auth/signout`](#43-post-v1authsignout)
    - [`GET /v1/me`](#44-get-v1me)
 5. [Rate limits](#5-rate-limits)
-6. [Later: sign-in](#6-later-sign-in)
+6. [`POST /v1/auth/signin`](#6-sign-in)
 7. [Acceptance checklist for the backend](#7-acceptance-checklist-for-the-backend)
 8. [Not in the demo](#8-not-in-the-demo)
 
@@ -100,7 +101,7 @@ A user who opens the app at least once every 90 days therefore never has to sign
 
 ### 3.1 The session object
 
-Sign-up, refresh and (later) sign-in all return this object:
+Sign-up, refresh and sign-in all return this object:
 
 ```json
 {
@@ -140,7 +141,8 @@ Sign-up, refresh and (later) sign-in all return this object:
   request once.
 - At app start, if the access token has expired.
 
-If the refresh fails with `401` (any code), the session is over. The app clears it and shows sign-up.
+If the refresh fails with `401` (any code), the session is over. The app clears it and shows sign-in,
+with a link to sign-up.
 Network errors and `5xx` do **not** end the session: the app keeps the stored tokens and tries again later.
 The demo backend answers an unexpected server failure, a database outage included, with
 `500 internal_error`; it does not produce `503 unavailable` yet. The app treats both the same way.
@@ -306,15 +308,43 @@ the database and holds across instances and restarts.
 
 ---
 
-## 6. Later: sign-in
+<a id="6-sign-in"></a>
+## 6. Sign-in
 
-The app does not call this endpoint yet, and it is not required for the demo.
+`POST /v1/auth/signin`
 
-`POST /v1/auth/signin`, with the body `{ "email": "…", "password": "…", "device": { …as in sign-up… } }`
+**Body**
 
-- `200`: `{ "user": {…}, "session": {…} }`, with a new token family.
-- `401 invalid_credentials`: the same answer whether the email is unknown or the password is wrong.
-- Rate limit: 10 per hour per email address and 20 per hour per IP.
+```json
+{
+  "email": "ada@example.com",
+  "password": "correct horse battery staple",
+  "device": { "platform": "android", "appVersion": "0.3.0", "installId": "5b0c1f7e-2a3d-4e8f-9c6b-1a2d3e4f5a6b" }
+}
+```
+
+No `Idempotency-Key`: a retried sign-in simply creates another session, and the unused one expires.
+
+| Field | Rule |
+|---|---|
+| `email` | Required string. Trimmed and lowercased before lookup. Its format is **not** checked: an address that cannot have an account just fails to sign in. |
+| `password` | Required string. Its length is **not** checked against the sign-up rules, for the same reason. A password longer than 1 024 characters fails at once without being hashed. |
+| `device` | Required, exactly as in sign-up. |
+
+Unknown fields, missing fields and wrong JSON types are answered as in sign-up (`validation_failed` or
+`malformed_request`, [§4.1](#field-error-codes)).
+
+| Status | Body / `code` | When | App behaviour |
+|---|---|---|---|
+| 200 | `{ "user": {…}, "session": {…} }` | The email and password match. `user` has the same shape as in sign-up. The session is a **new** token family: other sessions of the same user are not affected. | Stores the session and shows the home screen. |
+| 400 | `validation_failed` / `malformed_request` | See above. | As in sign-up. |
+| 401 | `invalid_credentials` | The email has no account, or the password is wrong. The body is **identical** in both cases, and both take the same time (the server checks a password hash either way). | Shows "Email or password is incorrect". |
+| 429 | `rate_limited` | See below. | Shows "Too many attempts, try again in N minutes". |
+
+Rate limits: **20 per hour per client IP** and **10 per hour per email address**. Every attempt with a
+valid body counts, successful or not. The per-IP limit is checked first. The per-email limit is kept in
+the database (by a keyed hash of the address, never the address itself), so it holds across relay
+instances and restarts, and it applies even when the email has no account.
 
 ---
 
@@ -330,6 +360,10 @@ The app does not call this endpoint yet, and it is not required for the demo.
 - [ ] Reusing an old refresh token after 30 s returns 401 `session_revoked`, and its descendants stop working.
 - [ ] Sign-out returns 204, works with an expired access token, and makes the refresh token fail with 401.
 - [ ] An expired access token on `GET /v1/me` returns 401 `token_expired`, not `invalid_token`.
+- [ ] Sign-in with the right email (in any case) and password returns 200 with a new session, and the other sessions keep working.
+- [ ] Sign-in with an unknown email and with a wrong password returns the same 401 `invalid_credentials` body.
+- [ ] The 11th sign-in for one email within an hour returns 429, even from different IPs.
+- [ ] A user whose session ended (signed out, or revoked by reuse detection) can sign in again.
 - [ ] Sign-out with a refresh token of another user returns 204 and that user's session keeps working.
 - [ ] No password, token or full request body appears in the logs. The logger redacts at least
       `req.headers.authorization`, `password`, `refreshToken`, `accessToken`, `Idempotency-Key`, and the
@@ -346,6 +380,6 @@ The app does not call this endpoint yet, and it is not required for the demo.
 | Sending an SOS | The demo app sends none. The relay's SOS endpoints are unchanged and unused by the app. |
 | Account ↔ device link | None. An access token says nothing about a device, and a device token says nothing about a user. When SOS returns to the app, both tokens are needed on `POST /v1/sos`, and they cannot both use `Authorization`. That change (a second header, or one token carrying both) is decided then, in both contracts at once. |
 | Phone verification | Not built. `phoneVerified` is always `false`. |
-| Data retention | Accounts are **not** purged automatically, unlike SOS data (deleted after 30 days). Expired and revoked refresh tokens are deleted 7 days after they expire or are revoked; sign-up idempotency records 24 hours after they are created. Every account created during the demo is deleted before a public release; this is an operator action. After it, the server answers `401 session_revoked` to that account's access tokens and `401 invalid_refresh_token` to its refresh tokens, so the app ends the session and shows sign-up. |
+| Data retention | Accounts are **not** purged automatically, unlike SOS data (deleted after 30 days). Expired and revoked refresh tokens are deleted 7 days after they expire or are revoked; sign-up idempotency records 24 hours after they are created; sign-in attempts after 1 hour. Every account created during the demo is deleted before a public release; this is an operator action. After it, the server answers `401 session_revoked` to that account's access tokens and `401 invalid_refresh_token` to its refresh tokens, so the app ends the session and shows sign-in. Signing in then fails with `invalid_credentials`, and signing up again is possible. |
 | Deleting an account | No endpoint during the demo. A user who asks is removed by an operator. Needed before a store release (both stores require in-app account deletion). |
-| Password reset | Not built. Sign-in itself is not used yet ([section 6](#6-later-sign-in)). |
+| Password reset | Not built. A user who forgets their password cannot get back in during the demo; an operator can delete the account so they can sign up again. |
