@@ -42,7 +42,7 @@ together with sending an SOS from a signed-in app ([section 8](#8-not-in-the-dem
 | Body size | At most 16 384 bytes. A larger body gets `413 payload_too_large`. |
 | Times | RFC 3339 in UTC, for example `2026-11-18T12:00:00Z`. |
 | Ids | Strings, treated as opaque by the app. UUIDs are recommended. |
-| Auth header | `Authorization: Bearer <accessToken>` on authenticated endpoints. |
+| Auth header | `Authorization: Bearer <accessToken>` on authenticated endpoints. The scheme is matched exactly as `Bearer` (capital B, one space). |
 | Cookies | None. |
 | Client timeout | The app gives up after 10 seconds. Every endpoint must answer within 8. |
 
@@ -116,11 +116,22 @@ Sign-up, refresh and (later) sign-in all return this object:
 - Each call to `POST /v1/auth/refresh` **consumes** the refresh token it is given and returns a new pair.
 - **Grace window:** if the same refresh token is presented again **within 30 seconds** of being rotated,
   return the **same** new pair that was already issued. This covers a request that succeeded on the
-  server but whose response never reached the phone.
+  server but whose response never reached the phone. Exactly 30 seconds still counts as within.
+  A grace reply writes nothing and extends nothing.
+- **Unless the new token has already been used.** If the token issued by that rotation has itself been
+  refreshed, the response clearly reached a client, so presenting the old token again is reuse, even
+  within 30 seconds: revoke the family and answer `401 session_revoked`.
 - **Reuse after the grace window** is treated as theft. Revoke that token's whole family (every token
   descended from the same sign-up or sign-in) and answer `401 session_revoked`.
 - The app makes **one refresh at a time** (single-flight), so concurrent refreshes from one install are
-  not expected.
+  not expected. If two arrive anyway, both get the same new pair.
+- A revoked family wins over everything: its tokens answer `session_revoked`, even inside the grace
+  window. An expired token answers `invalid_refresh_token` and never revokes its family.
+- **Known consequence:** if a refresh response is lost and the app retries only after 30 seconds, the
+  retry counts as reuse and the user has to sign up or sign in again. The app should retry a lost
+  refresh promptly (it is single-flight, so this is the same request again, not a new one).
+- **Known consequence:** whoever presents a token within 30 seconds of its rotation gets the live pair,
+  including a thief racing the app. This is the price of the grace window.
 
 ### 3.3 When the app refreshes
 
@@ -131,6 +142,8 @@ Sign-up, refresh and (later) sign-in all return this object:
 
 If the refresh fails with `401` (any code), the session is over. The app clears it and shows sign-up.
 Network errors and `5xx` do **not** end the session: the app keeps the stored tokens and tries again later.
+The demo backend answers an unexpected server failure, a database outage included, with
+`500 internal_error`; it does not produce `503 unavailable` yet. The app treats both the same way.
 
 ---
 
@@ -144,7 +157,7 @@ Creates an account and returns a session, so the user is signed in at once.
 
 | Header | Required | Notes |
 |---|---|---|
-| `Idempotency-Key` | Yes | A UUID v4 that the app generates once per sign-up form submission and reuses on every retry. If the same key arrives again within 24 hours with the **same body**, answer with the **original** response (same status, same user, a session for that user). The same key with a **different** body is answered with `422 idempotency_key_reused`. |
+| `Idempotency-Key` | Yes | A UUID v4 that the app generates once per sign-up form submission and reuses on every retry. If the same key arrives again within 24 hours with the **same body**, answer with the **original** response (same status, same user, a session for that user). The same key with a **different** body is answered with `422 idempotency_key_reused`. Only a `201` is remembered: a request that was refused (`400`, `409`, `429`) is evaluated afresh when it is retried. Keys are compared case-insensitively. A missing header is `400 validation_failed` with `{ "field": "Idempotency-Key", "code": "required" }`; a value that is not a UUID v4 has the code `invalid_value`. The header is checked before the body, and its error is returned on its own. |
 
 **Body**
 
@@ -160,11 +173,11 @@ Creates an account and returns a session, so the user is signed in at once.
 
 | Field | Type | Rule |
 |---|---|---|
-| `fullName` | string | 1–100 characters after trimming. The server trims it. |
+| `fullName` | string | 1–100 characters after trimming. The server trims it. No control characters (`invalid_value`). |
 | `phone` | string | E.164 (`^\+[1-9]\d{6,14}$`). The app has already normalised it with libphonenumber-js. |
 | `email` | string | A valid address of at most 254 characters. The server trims it and lowercases it before checking uniqueness and storing it. |
 | `password` | string | 8–128 characters. No composition rules. Hash with Argon2id or bcrypt (cost 12 or more). Never log it. |
-| `device` | object | Required. `platform` is `"ios"` or `"android"`. `appVersion` is a string of at most 32 characters. `installId` is a UUID that the app generates once per install. It is stored with the session family, for support and for revoking a device's sessions. |
+| `device` | object | Required. `platform` is `"ios"` or `"android"`. `appVersion` is a string of at most 32 characters, with no control characters (`invalid_value`); it may be empty. `installId` is a UUID that the app generates once per install. It is stored with the session family, for support and for revoking a device's sessions. |
 
 **Responses**
 
@@ -203,12 +216,17 @@ flow that answers the same way in both cases.
 
 | `code` | Fields |
 |---|---|
-| `required` | any |
-| `too_short` | `fullName`, `password` |
+| `required` | any. Means the field is absent. A field that is present but empty gets the field's own code (`too_short`, `invalid_phone`, …). |
+| `too_short` | `fullName`, `password` (an empty string included) |
 | `too_long` | `fullName`, `email`, `password`, `device.appVersion` |
 | `invalid_phone` | `phone` |
 | `invalid_email` | `email` |
-| `invalid_value` | `device.platform`, `device.installId` |
+| `invalid_value` | `device.platform`, `device.installId`; `fullName` and `device.appVersion` with a control character; any **unknown field** (for example `device.os`), listed after the known fields in the order sent, at most 16 of them; the `Idempotency-Key` header (see above); `refreshToken` that is not a string |
+
+A wrong JSON type for a sign-up field (a number where a string is expected, `null`, `device` that is not
+an object) or a body that is not a JSON object is `400 malformed_request`, not `validation_failed`. The
+exception is `refreshToken` on refresh and sign-out: a missing token is `required` and a non-string one
+is `invalid_value`, both under `validation_failed`.
 
 ### 4.2 `POST /v1/auth/refresh`
 
@@ -217,8 +235,9 @@ flow that answers the same way in both cases.
 | Status | Body / `code` | When |
 |---|---|---|
 | 200 | `{ "session": { … } }` | The token is valid. It is rotated, or the grace window applies ([§3.2](#32-rotation-and-reuse)). |
-| 401 | `invalid_refresh_token` | The token is unknown, expired or malformed. |
-| 401 | `session_revoked` | The token was reused after the grace window, the family was revoked, or the user signed out. |
+| 400 | `validation_failed` | `refreshToken` is missing (`required`) or not a string (`invalid_value`). |
+| 401 | `invalid_refresh_token` | The token is unknown, expired or malformed, including an empty string. |
+| 401 | `session_revoked` | The token was reused (after the grace window, or after its successor was used: [§3.2](#32-rotation-and-reuse)), the family was revoked, or the user signed out. A token of a revoked family answers this even when it has also expired, until it is purged; after that it is `invalid_refresh_token`. Both end the session in the app. |
 
 ### 4.3 `POST /v1/auth/signout`
 
@@ -241,8 +260,11 @@ What is revoked:
 | Status | When |
 |---|---|
 | 204 | Revoked, already revoked, or nothing to revoke (see above). The endpoint is idempotent. |
-| 400 `validation_failed` | `refreshToken` is missing or not a string. |
+| 400 `validation_failed` | `refreshToken` is missing (`required`) or not a string (`invalid_value`). |
+| 400 `malformed_request` | The body is empty, not JSON, or not a JSON object. |
 | 401 `invalid_token` | The access token is missing, malformed or forged. An expired access token is **not** a 401 here. |
+
+The access token is checked first: a request with a bad token and a bad body gets the `401`.
 
 ### 4.4 `GET /v1/me`
 
@@ -266,11 +288,17 @@ user's name.
 |---|---|---|
 | `POST /v1/auth/signup` | 5 per hour | client IP |
 | `POST /v1/auth/signup` | 3 per day | `phone` |
-| `POST /v1/auth/refresh` | 30 per hour | refresh token family |
-| everything else | 120 per minute | user |
+| `POST /v1/auth/refresh` | 30 per hour | refresh token family. Every request with a token of a known family counts, whatever the answer. An unknown token belongs to no family and is held back by the relay's per-IP limit instead. |
+| `POST /v1/auth/signout` | 120 per minute | the access token's family, not the user, so a stale or revoked access token can never use up the budget of the user's live session |
+| `GET /v1/me` (and later authenticated endpoints) | 120 per minute | user. Only requests whose token is accepted count. |
+| every endpoint | the relay's per-IP limit (default 120 per minute) | client IP |
 
-Idempotent replays of sign-up ([4.1](#41-post-v1authsignup)) do not count towards the limits. Every
-`429` includes `retryAfterSeconds`.
+Sign-up limits count every request with a valid body that is not a replay, a `409` included (this is
+what slows down checking which emails and phones have accounts). A `400`, a `422` and a request refused by
+a limit do not count, and neither do idempotent replays ([4.1](#41-post-v1authsignup)), including a request
+that only turns out to be a replay while it is being handled. The per-IP limit is checked before the
+per-phone one. Every `429` includes `retryAfterSeconds`; for the per-phone limit it is the time until an
+attempt leaves the 24-hour window.
 
 ---
 
