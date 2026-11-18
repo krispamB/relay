@@ -33,6 +33,8 @@ export const METRICS = {
   authRefreshes: 'auth_refreshes_total',
   /** counter {result: revoked|noop} */
   authSignouts: 'auth_signouts_total',
+  /** counter {result: success|invalid_credentials|rate_limited} */
+  authSignins: 'auth_signins_total',
 } as const;
 
 export type MetricName = (typeof METRICS)[keyof typeof METRICS];

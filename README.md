@@ -132,13 +132,13 @@ TEST_DATABASE_URL=postgres://user:pass@localhost:5432/relay_test npm test
 
 ## Auth (demo app)
 
-The demo app signs users up and keeps them signed in. It sends no SOS. The endpoints are `POST /v1/auth/signup`, `POST /v1/auth/refresh`, `POST /v1/auth/signout` and `GET /v1/me`, specified in [`docs/auth-contract.md`](docs/auth-contract.md) (the contract; its section 7 is the acceptance checklist, walked by `test/e2e/auth.e2e.test.ts`) and built as in [`docs/auth-implementation-plan.md`](docs/auth-implementation-plan.md). They are off unless `AUTH_ENABLED=true`, and need `AUTH_TOKEN_SECRET`.
+The demo app signs users up and keeps them signed in. It sends no SOS. The endpoints are `POST /v1/auth/signup`, `POST /v1/auth/signin`, `POST /v1/auth/refresh`, `POST /v1/auth/signout` and `GET /v1/me`, specified in [`docs/auth-contract.md`](docs/auth-contract.md) (the contract; its section 7 is the acceptance checklist, walked by `test/e2e/auth.e2e.test.ts`) and built as in [`docs/auth-implementation-plan.md`](docs/auth-implementation-plan.md). They are off unless `AUTH_ENABLED=true`, and need `AUTH_TOKEN_SECRET`. Sign-in returns a new session for an existing account: 20 attempts per hour per client IP and 10 per hour per email address.
 
 - **Separate from SOS.** An access token (15 minutes) is never accepted on the SOS routes, and a device token is never accepted on the auth routes. An account and a registered device are not linked.
 - **Own error codes.** The auth endpoints answer with the codes in the auth contract; the SOS routes keep the ones in the app API contract.
-- **Migration.** `migrations/004_auth.sql` runs with the others, whether or not auth is on.
+- **Migration.** `migrations/004_auth.sql` and `migrations/005_signin_attempts.sql` run with the others, whether or not auth is on.
 - **OpenAPI.** `docs/openapi.json` documents the auth routes (tag `auth`, security scheme `accessToken`, next to `deviceToken`). A relay with `AUTH_ENABLED=false` serves the same document without them.
-- **Data retention.** Accounts are **not** purged: every demo account is deleted by an operator before a public release (contract section 8). The purge job deletes refresh tokens 7 days after they expire or are revoked, and sign-up idempotency records and phone attempt records 24 hours after they are created. SOS data keeps its 30 days.
+- **Data retention.** Accounts are **not** purged: every demo account is deleted by an operator before a public release (contract section 8). The purge job deletes refresh tokens 7 days after they expire or are revoked, sign-up idempotency records and phone attempt records 24 hours after they are created, and sign-in attempt records 1 hour after they are created. SOS data keeps its 30 days.
 
 ## Deploying on Railway
 
@@ -232,7 +232,7 @@ One outbound webhook (`ALERT_WEBHOOK_URL`); body `{severity, code, text, referen
 
 ### Metrics
 
-`GET /metrics` on the admin port (Prometheus text format), behind the admin token. Counters: submissions by outcome, Core calls by endpoint and result, attestation results, rate-limit refusals by rule, and with auth on `auth_signups_total` (created, replay), `auth_refreshes_total` (rotated, grace, reuse_detected, revoked, invalid, rate_limited) and `auth_signouts_total` (revoked, noop). Histograms: Core latency and `POST /v1/sos` latency. Gauges: `sos_queue_depth`, `sos_oldest_queued_age_seconds`, `sos_delivery_paused`. Metrics and logs carry no phone number, name, coordinate or free text.
+`GET /metrics` on the admin port (Prometheus text format), behind the admin token. Counters: submissions by outcome, Core calls by endpoint and result, attestation results, rate-limit refusals by rule, and with auth on `auth_signups_total` (created, replay), `auth_signins_total` (success, invalid_credentials, rate_limited), `auth_refreshes_total` (rotated, grace, reuse_detected, revoked, invalid, rate_limited) and `auth_signouts_total` (revoked, noop). Histograms: Core latency and `POST /v1/sos` latency. Gauges: `sos_queue_depth`, `sos_oldest_queued_age_seconds`, `sos_delivery_paused`. Metrics and logs carry no phone number, name, coordinate or free text.
 
 ## Before go-live
 

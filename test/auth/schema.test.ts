@@ -155,6 +155,8 @@ describe('auth schema (migration 004)', () => {
       'signup_idempotency_user_idx',
       'signup_phone_attempts_idx',
       'signup_phone_attempts_created_idx',
+      'signin_attempts_idx',
+      'signin_attempts_created_idx',
     ]) {
       expect(names.has(name), name).toBe(true);
     }

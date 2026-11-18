@@ -1730,6 +1730,358 @@
         }
       }
     },
+    "/v1/auth/signin": {
+      "post": {
+        "summary": "Sign in to an existing account",
+        "tags": [
+          "auth"
+        ],
+        "description": "Returns the user and a new session (a new token family). An unknown email and a wrong password are both 401 `invalid_credentials`. Limits: 20 per hour per client IP and 10 per hour per email address. Every validated attempt counts, whether or not the password matches.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "email",
+                  "password",
+                  "device"
+                ],
+                "properties": {
+                  "email": {
+                    "description": "Trimmed and lower-cased by the server.",
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  },
+                  "device": {
+                    "additionalProperties": false,
+                    "type": "object",
+                    "required": [
+                      "platform",
+                      "appVersion",
+                      "installId"
+                    ],
+                    "properties": {
+                      "platform": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "ios"
+                            ]
+                          },
+                          {
+                            "type": "string",
+                            "enum": [
+                              "android"
+                            ]
+                          }
+                        ]
+                      },
+                      "appVersion": {
+                        "maxLength": 32,
+                        "type": "string"
+                      },
+                      "installId": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "user",
+                    "session"
+                  ],
+                  "properties": {
+                    "user": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "fullName",
+                        "phone",
+                        "email",
+                        "phoneVerified",
+                        "createdAt"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "fullName": {
+                          "type": "string"
+                        },
+                        "phone": {
+                          "type": "string"
+                        },
+                        "email": {
+                          "type": "string"
+                        },
+                        "phoneVerified": {
+                          "type": "boolean"
+                        },
+                        "createdAt": {
+                          "format": "date-time",
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "session": {
+                      "type": "object",
+                      "required": [
+                        "accessToken",
+                        "accessTokenExpiresAt",
+                        "refreshToken",
+                        "refreshTokenExpiresAt"
+                      ],
+                      "properties": {
+                        "accessToken": {
+                          "type": "string"
+                        },
+                        "accessTokenExpiresAt": {
+                          "format": "date-time",
+                          "type": "string"
+                        },
+                        "refreshToken": {
+                          "type": "string"
+                        },
+                        "refreshTokenExpiresAt": {
+                          "format": "date-time",
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "fields": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "field",
+                              "code"
+                            ],
+                            "properties": {
+                              "field": {
+                                "type": "string"
+                              },
+                              "code": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "fields": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "field",
+                              "code"
+                            ],
+                            "properties": {
+                              "field": {
+                                "type": "string"
+                              },
+                              "code": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "fields": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "field",
+                              "code"
+                            ],
+                            "properties": {
+                              "field": {
+                                "type": "string"
+                              },
+                              "code": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "fields": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "field",
+                              "code"
+                            ],
+                            "properties": {
+                              "field": {
+                                "type": "string"
+                              },
+                              "code": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/auth/refresh": {
       "post": {
         "summary": "Rotate a refresh token for a new session",

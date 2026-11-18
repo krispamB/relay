@@ -204,6 +204,7 @@ describe('auth metrics', () => {
     m.inc(METRICS.authSignups, { result: 'replay' });
     m.inc(METRICS.authRefreshes, { result: 'rotated' });
     m.inc(METRICS.authSignouts, { result: 'noop' });
+    m.inc(METRICS.authSignins, { result: 'success' });
     const out = await m.render();
     expect(out).toContain('# TYPE auth_signups_total counter');
     expect(out).toContain('auth_signups_total{result="created"} 1');
@@ -212,5 +213,7 @@ describe('auth metrics', () => {
     expect(out).toContain('auth_refreshes_total{result="rotated"} 1');
     expect(out).toContain('# TYPE auth_signouts_total counter');
     expect(out).toContain('auth_signouts_total{result="noop"} 1');
+    expect(out).toContain('# TYPE auth_signins_total counter');
+    expect(out).toContain('auth_signins_total{result="success"} 1');
   });
 });

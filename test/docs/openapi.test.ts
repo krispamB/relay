@@ -12,6 +12,7 @@ type Doc = {
 
 const AUTH_OPERATIONS: [method: string, path: string][] = [
   ['post', '/v1/auth/signup'],
+  ['post', '/v1/auth/signin'],
   ['post', '/v1/auth/refresh'],
   ['post', '/v1/auth/signout'],
   ['get', '/v1/me'],
@@ -49,7 +50,7 @@ describe('docs/openapi.json', () => {
     }
   });
 
-  it('documents the four auth endpoints under the auth tag', async () => {
+  it('documents the auth endpoints under the auth tag', async () => {
     const doc = await committed();
     for (const [method, path] of AUTH_OPERATIONS) {
       const op = doc.paths[path]?.[method];

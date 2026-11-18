@@ -12,6 +12,7 @@ import { ApiError, safeError } from '../errors.js';
 import { AuthError, authErrors } from './errors.js';
 import { meRoutes } from './routes/me.js';
 import { refreshRoutes } from './routes/refresh.js';
+import { signinRoutes } from './routes/signin.js';
 import { signoutRoutes } from './routes/signout.js';
 import { signupRoutes } from './routes/signup.js';
 
@@ -51,6 +52,7 @@ export async function authPlugin(app: PublicApp, opts: { ctx: AppContext }): Pro
   });
 
   await signupRoutes(app, ctx);
+  await signinRoutes(app, ctx);
   await refreshRoutes(app, ctx);
   await signoutRoutes(app, ctx);
   await meRoutes(app, ctx);

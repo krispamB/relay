@@ -157,6 +157,14 @@ const me = (accessToken: string) => call('GET', '/v1/me', { headers: bearer(acce
 const refresh = (refreshToken: string) => call('POST', '/v1/auth/refresh', { body: { refreshToken } });
 const signout = (accessToken: string, refreshToken: string) =>
   call('POST', '/v1/auth/signout', { headers: bearer(accessToken), body: { refreshToken } });
+const signin = (email: string, password: string) =>
+  call('POST', '/v1/auth/signin', {
+    body: {
+      email,
+      password,
+      device: { platform: 'android', appVersion: '0.3.0', installId: INSTALL_ID },
+    },
+  });
 
 async function registerDevice(): Promise<string> {
   const nonce = await call('GET', '/v1/devices/nonce');
@@ -353,6 +361,32 @@ describe('docs/auth-contract.md §7: acceptance checklist', () => {
     expect((await me(rotated.body.session.accessToken)).status).toBe(200);
     // And nothing of Ada's was revoked either.
     expect((await me(ada.session.accessToken)).status).toBe(200);
+  });
+
+  it('a user whose session ended can sign in again', async () => {
+    const created = await newUser();
+    const ended = await signout(created.session.accessToken, created.session.refreshToken);
+    expect(ended.status).toBe(204);
+    expect((await refresh(created.session.refreshToken)).body.error.code).toBe('session_revoked');
+
+    const again = await signin(created.user.email, PASSWORD);
+
+    expect(again.status).toBe(200);
+    expect(again.body.user).toEqual(created.user);
+    expect(again.body.session.refreshToken).not.toBe(created.session.refreshToken);
+    expect((await me(again.body.session.accessToken)).status).toBe(200);
+    expect((await me(created.session.accessToken)).body.error.code).toBe('session_revoked');
+  });
+
+  it('sign-in answers the same for an unknown email and a wrong password', async () => {
+    const created = await newUser();
+    const unknown = await signin('nobody@example.com', PASSWORD);
+    const wrong = await signin(created.user.email, 'not the password');
+
+    expect(unknown.status).toBe(401);
+    expect(wrong.status).toBe(401);
+    expect(unknown.body).toEqual(wrong.body);
+    expect(unknown.body.error.code).toBe('invalid_credentials');
   });
 
   it('A `GET /v1/me` with a relay device token answers 401 `invalid_token`, and a `POST /v1/sos` with an access token answers 401 `unauthorized`: the two kinds of token are never accepted for each other.', async () => {

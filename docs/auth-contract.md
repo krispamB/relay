@@ -290,6 +290,8 @@ user's name.
 |---|---|---|
 | `POST /v1/auth/signup` | 5 per hour | client IP |
 | `POST /v1/auth/signup` | 3 per day | `phone` |
+| `POST /v1/auth/signin` | 20 per hour | client IP |
+| `POST /v1/auth/signin` | 10 per hour | `email` ([§6](#6-sign-in)) |
 | `POST /v1/auth/refresh` | 30 per hour | refresh token family. Every request with a token of a known family counts, whatever the answer. An unknown token belongs to no family and is held back by the relay's per-IP limit instead. |
 | `POST /v1/auth/signout` | 120 per minute | the access token's family, not the user, so a stale or revoked access token can never use up the budget of the user's live session |
 | `GET /v1/me` (and later authenticated endpoints) | 120 per minute | user. Only requests whose token is accepted count. |
@@ -344,7 +346,9 @@ Unknown fields, missing fields and wrong JSON types are answered as in sign-up (
 Rate limits: **20 per hour per client IP** and **10 per hour per email address**. Every attempt with a
 valid body counts, successful or not. The per-IP limit is checked first. The per-email limit is kept in
 the database (by a keyed hash of the address, never the address itself), so it holds across relay
-instances and restarts, and it applies even when the email has no account.
+instances and restarts, and it applies even when the email has no account. An attempt refused by a limit
+is not counted, so waiting is enough: the next attempt works once the oldest counted one is an hour old.
+The `message` of `invalid_credentials` is always "The email or password is not correct."
 
 ---
 

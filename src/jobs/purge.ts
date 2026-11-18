@@ -9,7 +9,8 @@
  * An empty family younger than 7 days and not revoked that long ago is kept too. The "created more
  * than 7 days ago and empty" clause is what removes a family whose newest token expired more than 7
  * days ago: that token is gone, and a 90-day token lifetime means the family is far older than 7 days.
- * A row exactly on a cutoff (7 days, or 24 hours for sign-up records) is kept; only older rows go.
+ * A row exactly on a cutoff (7 days, 24 hours for sign-up records, 1 hour for sign-in attempts)
+ * is kept; only older rows go.
  */
 
 import { DAY, HOUR } from '../clock.js';
@@ -24,6 +25,8 @@ export const ALERT_LOG_RETENTION_MS = DAY;
 export const AUTH_TOKEN_RETENTION_MS = 7 * DAY;
 /** Auth contract §8. Sign-up idempotency rows and per-phone attempt rows. */
 export const AUTH_SIGNUP_RETENTION_MS = DAY;
+/** Sign-in attempts are only needed for the 1-hour per-email limit (contract §6). */
+export const AUTH_SIGNIN_ATTEMPT_RETENTION_MS = HOUR;
 /** Rows per DELETE statement; each statement is its own short transaction. */
 export const PURGE_BATCH = 500;
 /** Upper bound on statements per table per pass; the next hour continues. */
@@ -41,6 +44,7 @@ export interface PurgeCounts {
   tokenFamilies: number;
   signupIdempotency: number;
   signupPhoneAttempts: number;
+  signinAttempts: number;
 }
 
 export function createPurgeJob(ctx: AppContext): Job {
@@ -78,6 +82,7 @@ export async function runPurgePass(ctx: AppContext): Promise<PurgeCounts> {
   const alertCutoff = new Date(now.getTime() - ALERT_LOG_RETENTION_MS);
   const tokenCutoff = new Date(now.getTime() - AUTH_TOKEN_RETENTION_MS);
   const signupCutoff = new Date(now.getTime() - AUTH_SIGNUP_RETENTION_MS);
+  const signinCutoff = new Date(now.getTime() - AUTH_SIGNIN_ATTEMPT_RETENTION_MS);
 
   // Postgres has no DELETE ... LIMIT, so each batch is DELETE ... WHERE key IN (SELECT key ... LIMIT n).
   const counts: PurgeCounts = {
@@ -294,6 +299,22 @@ export async function runPurgePass(ctx: AppContext): Promise<PurgeCounts> {
               .selectFrom('signup_phone_attempts')
               .select('id')
               .where('created_at', '<', signupCutoff)
+              .limit(PURGE_BATCH),
+          )
+          .executeTakeFirst(),
+      ),
+    ),
+    signinAttempts: await inBatches(async () =>
+      count(
+        await db
+          .deleteFrom('signin_attempts')
+          .where(
+            'id',
+            'in',
+            db
+              .selectFrom('signin_attempts')
+              .select('id')
+              .where('created_at', '<', signinCutoff)
               .limit(PURGE_BATCH),
           )
           .executeTakeFirst(),

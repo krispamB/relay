@@ -170,6 +170,13 @@ export interface SignupPhoneAttemptsTable {
   created_at: Timestamp;
 }
 
+/** Per-email sign-in attempts for the 10-per-hour limit. email_hash is a keyed HMAC, never the address. */
+export interface SigninAttemptsTable {
+  id: Generated<string>;
+  email_hash: string;
+  created_at: Timestamp;
+}
+
 export interface Database {
   devices: DevicesTable;
   device_registrations: DeviceRegistrationsTable;
@@ -185,6 +192,7 @@ export interface Database {
   refresh_tokens: RefreshTokensTable;
   signup_idempotency: SignupIdempotencyTable;
   signup_phone_attempts: SignupPhoneAttemptsTable;
+  signin_attempts: SigninAttemptsTable;
 }
 
 export type Device = Selectable<DevicesTable>;

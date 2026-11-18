@@ -5,7 +5,7 @@
  * exactly on the cutoff stays. Users are never deleted.
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { DAY, SECOND } from '../../src/clock.js';
+import { DAY, HOUR, SECOND } from '../../src/clock.js';
 import { runPurgePass } from '../../src/jobs/purge.js';
 import { closeTestDb, createTestContext, resetDb, type TestContext } from '../helpers/context.js';
 
@@ -262,5 +262,26 @@ describe('auth purge (contract §8)', () => {
       ).map((r) => r.phone_hash),
     ).toEqual(['exact', 'inside']);
     expect(await ids(ctx, 'users')).toEqual(['user-signup']);
+  });
+
+  it('deletes sign-in attempts only once they are older than 1 hour', async () => {
+    const ctx = createTestContext();
+    const now = ctx.clock.now();
+    await ctx.db
+      .insertInto('signin_attempts')
+      .values([
+        { email_hash: 'past', created_at: ago(now, HOUR + SECOND) },
+        { email_hash: 'exact', created_at: ago(now, HOUR) },
+        { email_hash: 'inside', created_at: ago(now, HOUR - SECOND) },
+      ])
+      .execute();
+
+    const counts = await runPurgePass(ctx);
+    expect(counts.signinAttempts).toBe(1);
+    expect(
+      (await ctx.db.selectFrom('signin_attempts').select('email_hash').orderBy('email_hash').execute()).map(
+        (r) => r.email_hash,
+      ),
+    ).toEqual(['exact', 'inside']);
   });
 });

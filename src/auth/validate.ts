@@ -41,6 +41,20 @@ export interface RefreshBody {
   refreshToken: string;
 }
 
+/** Sign-in body (contract §6). Email is trimmed and lowercased. Password is as sent. */
+export interface SigninInput {
+  email: string;
+  password: string;
+  device: SignupInput['device'];
+}
+
+/**
+ * A password longer than this is refused as `invalid_credentials` without Argon2 (CPU abuse).
+ * Shorter values, including ones that could never match a sign-up password, are not field errors:
+ * a 400 would tell the caller the value cannot be an account's password.
+ */
+export const SIGNIN_PASSWORD_MAX_CHARS = 1024;
+
 const PHONE_PATTERN = /^\+[1-9]\d{6,14}$/;
 const UUID = new RegExp(UUID_PATTERN);
 const MAX_EMAIL = 254;
@@ -50,7 +64,7 @@ const MAX_UNKNOWN_NAME = 64;
 type Obj = Record<string, unknown>;
 
 /** The length in characters (code points). */
-function length(s: string): number {
+export function characterLength(s: string): number {
   let n = 0;
   for (const _ of s) n++;
   return n;
@@ -109,7 +123,7 @@ function check(
 
 function textLength(min: number, max: number): (s: string) => FieldErrorCode | undefined {
   return (s) => {
-    const n = length(s);
+    const n = characterLength(s);
     if (n < min) return 'too_short';
     if (n > max) return 'too_long';
     return undefined;
@@ -155,7 +169,7 @@ export function validateSignup(body: unknown): SignupInput {
   check(c, 'fullName', fullName, (v) => (CONTROL.test(v) ? 'invalid_value' : textLength(1, 100)(v)));
   check(c, 'phone', phone, (v) => (PHONE_PATTERN.test(v) ? undefined : 'invalid_phone'));
   check(c, 'email', email, (v) =>
-    length(v) > MAX_EMAIL ? 'too_long' : validEmail(v) ? undefined : 'invalid_email',
+    characterLength(v) > MAX_EMAIL ? 'too_long' : validEmail(v) ? undefined : 'invalid_email',
   );
   check(c, 'password', password, textLength(8, 128));
   if (device === undefined) c.add('device', 'required');
@@ -164,7 +178,7 @@ export function validateSignup(body: unknown): SignupInput {
       v === 'ios' || v === 'android' ? undefined : 'invalid_value',
     );
     check(c, 'device.appVersion', appVersion, (v) =>
-      CONTROL.test(v) ? 'invalid_value' : length(v) <= 32 ? undefined : 'too_long',
+      CONTROL.test(v) ? 'invalid_value' : characterLength(v) <= 32 ? undefined : 'too_long',
     );
     check(c, 'device.installId', installId, (v) => (UUID.test(v) ? undefined : 'invalid_value'));
   }
@@ -203,4 +217,53 @@ export function validateRefreshBody(body: unknown): RefreshBody {
 
 export function validateSignoutBody(body: unknown): RefreshBody {
   return validateTokenBody(body);
+}
+
+const SIGNIN_FIELDS = ['email', 'password', 'device'] as const;
+
+/**
+ * Validates a sign-in body and returns it normalised, or throws an AuthError.
+ * Device rules are the sign-up rules. Email and password have no format or length rules here:
+ * any string is accepted, and a value that matches no account is the route's 401.
+ */
+export function validateSignin(body: unknown): SigninInput {
+  if (!isObject(body)) throw authErrors.malformedRequest();
+
+  const email = readString(body, 'email')?.trim().toLowerCase();
+  const password = readString(body, 'password');
+  let device: Obj | undefined;
+  if (has(body, 'device')) {
+    if (!isObject(body.device)) throw authErrors.malformedRequest();
+    device = body.device;
+  }
+  const platform = device && readString(device, 'platform');
+  const appVersion = device && readString(device, 'appVersion');
+  const installId = device && readString(device, 'installId');
+
+  const c = new Collector();
+  if (email === undefined) c.add('email', 'required');
+  if (password === undefined) c.add('password', 'required');
+  if (device === undefined) c.add('device', 'required');
+  else {
+    check(c, 'device.platform', platform, (v) =>
+      v === 'ios' || v === 'android' ? undefined : 'invalid_value',
+    );
+    check(c, 'device.appVersion', appVersion, (v) =>
+      CONTROL.test(v) ? 'invalid_value' : characterLength(v) <= 32 ? undefined : 'too_long',
+    );
+    check(c, 'device.installId', installId, (v) => (UUID.test(v) ? undefined : 'invalid_value'));
+  }
+  c.unknownFields(body, SIGNIN_FIELDS, '');
+  if (device) c.unknownFields(device, DEVICE_FIELDS, 'device.');
+  if (c.fields.length > 0) c.fail();
+
+  return {
+    email: email as string,
+    password: password as string,
+    device: {
+      platform: platform as 'ios' | 'android',
+      appVersion: appVersion as string,
+      installId: installId as string,
+    },
+  };
 }

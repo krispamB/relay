@@ -124,7 +124,7 @@ export async function closeTestDb(): Promise<void> {
 
 /** Empties every table and restores the single relay_state row. Call in beforeEach. */
 export async function resetDb(db: Db = testDb()): Promise<void> {
-  await sql`TRUNCATE signup_phone_attempts, signup_idempotency, refresh_tokens, token_families, users, submission_events, submissions, device_registrations, devices, nonces, strikes, blocks, alert_log, relay_state RESTART IDENTITY CASCADE`.execute(
+  await sql`TRUNCATE signin_attempts, signup_phone_attempts, signup_idempotency, refresh_tokens, token_families, users, submission_events, submissions, device_registrations, devices, nonces, strikes, blocks, alert_log, relay_state RESTART IDENTITY CASCADE`.execute(
     db,
   );
   await sql`INSERT INTO relay_state (id) VALUES (1)`.execute(db);

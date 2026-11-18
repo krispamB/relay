@@ -49,6 +49,7 @@ describe('authErrors: one helper for every code in the contract', () => {
     ['sessionRevoked', () => authErrors.sessionRevoked(), 401, 'session_revoked'],
     ['tokenExpired', () => authErrors.tokenExpired(), 401, 'token_expired'],
     ['invalidToken', () => authErrors.invalidToken(), 401, 'invalid_token'],
+    ['invalidCredentials', () => authErrors.invalidCredentials(), 401, 'invalid_credentials'],
   ];
 
   it.each(cases)('%s', (_name, make, status, code) => {

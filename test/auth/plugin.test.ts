@@ -1,8 +1,8 @@
 /**
  * The auth plugin: its error handler, the contract's body rules and its mounting switch.
  *
- * The four route modules are stubs that register nothing yet, so this file replaces them with
- * test-only routes (vi.mock). The real buildPublicApp, plugin and error handler run around them.
+ * The route modules are replaced with test-only routes (vi.mock). The real buildPublicApp, plugin and
+ * error handler run around them.
  */
 import { Type } from '@sinclair/typebox';
 import type { FastifyInstance } from 'fastify';
@@ -72,6 +72,7 @@ vi.mock('../../src/auth/routes/signout.js', async () => {
 });
 
 vi.mock('../../src/auth/routes/me.js', () => ({ meRoutes: async () => {} }));
+vi.mock('../../src/auth/routes/signin.js', () => ({ signinRoutes: async () => {} }));
 
 const AUTH_ON = { enabled: true, tokenSecret: 'auth-token-secret-for-tests-0123456789ab' };
 

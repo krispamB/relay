@@ -32,7 +32,8 @@ export type AuthErrorCode =
   | 'invalid_refresh_token'
   | 'session_revoked'
   | 'token_expired'
-  | 'invalid_token';
+  | 'invalid_token'
+  | 'invalid_credentials';
 
 export interface AuthErrorBody {
   error: {
@@ -90,4 +91,7 @@ export const authErrors = {
   sessionRevoked: () => new AuthError(401, 'session_revoked', 'This session has ended.'),
   tokenExpired: () => new AuthError(401, 'token_expired', 'The access token has expired.'),
   invalidToken: () => new AuthError(401, 'invalid_token', 'The access token is not valid.'),
+  /** The same answer whether the email is unknown or the password is wrong (contract §6). */
+  invalidCredentials: () =>
+    new AuthError(401, 'invalid_credentials', 'The email or password is not correct.'),
 };
