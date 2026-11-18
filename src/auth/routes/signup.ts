@@ -27,9 +27,8 @@
  * - Two different sign-ups for one email or phone: the loser's unique violation becomes `email_taken` or
  *   `phone_taken`, with email first as in the pre-check.
  * - The phone limit is exact under concurrency: counting and recording run under an advisory lock per phone.
- *   A request that only turns out to be a replay after its attempt was recorded (a same-key twin committed
- *   first) has that attempt deleted again, so replays never use up the phone's allowance. The in-memory
- *   per-IP hit is not given back.
+ *   A request that only turns out to be a replay or a 422 after it was counted (a same-key twin committed
+ *   first) gives back both its per-IP hit and its phone attempt, so neither ever uses up an allowance.
  *
  * Logs: the user id only. No body field, header value or token is ever logged.
  */
@@ -43,7 +42,7 @@ import { phoneHash, safeEqual } from '../../crypto.js';
 import { type Db, isUniqueViolation } from '../../db/index.js';
 import type { User } from '../../db/types.js';
 import { METRICS } from '../../metrics.js';
-import { type AuthError, authErrors } from '../errors.js';
+import { AuthError, authErrors } from '../errors.js';
 import { type AuthKeys, deriveAuthKeys } from '../keys.js';
 import { hashPassword } from '../password.js';
 import { issueSession, rfc3339, type Session } from '../sessions.js';
@@ -351,9 +350,28 @@ export async function signupRoutes(app: PublicApp, ctx: AppContext): Promise<voi
       return reply.status(201).send(replay);
     }
 
-    const retryAfter = ipLimiter.hit(clientIp(req, ctx.config.clientIpHeader), ctx.clock.now().getTime());
+    const ip = clientIp(req, ctx.config.clientIpHeader);
+    const retryAfter = ipLimiter.hit(ip, ctx.clock.now().getTime());
     if (retryAfter > 0) throw authErrors.rateLimited(retryAfter);
     const attemptId = await recordPhoneAttempt(ctx, input.phone, ctx.clock.now());
+    /**
+     * Contract §5: a replay and a 422 do not count. When either only shows up after the request was
+     * counted (a same-key twin committed meanwhile), give back the IP hit and the phone attempt.
+     */
+    const uncounted = async <T>(outcome: Promise<T>): Promise<T> => {
+      const giveBack = async () => {
+        ipLimiter.refund(ip, ctx.clock.now().getTime());
+        await refundPhoneAttempt(ctx, attemptId);
+      };
+      try {
+        const value = await outcome;
+        await giveBack();
+        return value;
+      } catch (err) {
+        if (err instanceof AuthError && err.code === 'idempotency_key_reused') await giveBack();
+        throw err;
+      }
+    };
 
     const taken = await findTaken(ctx.db, input.email, input.phone);
     if (taken) {
@@ -361,8 +379,7 @@ export async function signupRoutes(app: PublicApp, ctx: AppContext): Promise<voi
       // clash is with our own account, and the answer is its replay, not a 409.
       const committed = await findStoredKey(ctx.db, idempotencyKey, ctx.clock.now());
       if (!committed) throw taken;
-      const replay = await answerReplay(ctx, keys, committed, hmac, input);
-      await refundPhoneAttempt(ctx, attemptId);
+      const replay = await uncounted(answerReplay(ctx, keys, committed, hmac, input));
       ctx.metrics.inc(METRICS.authSignups, { result: 'replay' });
       req.log.info({ userId: replay.user.id }, 'sign-up replayed');
       return reply.status(201).send(replay);
@@ -376,8 +393,8 @@ export async function signupRoutes(app: PublicApp, ctx: AppContext): Promise<voi
       signupResult = 'created';
     } catch (err) {
       // A lost race answers as the winner's replay (or throws). It did not create this user.
-      created = await answerRace(ctx, keys, err, input, idempotencyKey, hmac);
-      await refundPhoneAttempt(ctx, attemptId);
+      // email_taken / phone_taken from here stay counted, like any 409.
+      created = await uncounted(answerRace(ctx, keys, err, input, idempotencyKey, hmac));
       signupResult = 'replay';
     }
     ctx.metrics.inc(METRICS.authSignups, { result: signupResult });

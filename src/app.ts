@@ -119,6 +119,11 @@ export class WindowLimiter {
     if (entry.count <= this.max) return 0;
     return Math.max(1, Math.ceil((entry.windowStart + this.windowMs - nowMs) / 1000));
   }
+  /** Gives back one hit counted in the current window (for a request that turned out not to count). */
+  refund(key: string, nowMs: number): void {
+    const entry = this.hits.get(key);
+    if (entry && nowMs - entry.windowStart < this.windowMs && entry.count > 0) entry.count -= 1;
+  }
   private sweep(nowMs: number): void {
     for (const [k, v] of this.hits) if (nowMs - v.windowStart >= this.windowMs) this.hits.delete(k);
   }

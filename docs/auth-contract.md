@@ -300,6 +300,10 @@ that only turns out to be a replay while it is being handled. The per-IP limit i
 per-phone one. Every `429` includes `retryAfterSeconds`; for the per-phone limit it is the time until an
 attempt leaves the 24-hour window.
 
+The per-IP, per-family and per-user limits are kept in each relay instance's memory: with two instances
+behind the edge they are effectively doubled, and a restart resets them. The per-phone limit is kept in
+the database and holds across instances and restarts.
+
 ---
 
 ## 6. Later: sign-in

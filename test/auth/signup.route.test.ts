@@ -516,12 +516,13 @@ describe('rate limits', () => {
 });
 
 describe('concurrency', () => {
-  it('a same-key twin that commits between the key lookup and the taken check → replay, not 409', async () => {
+  /**
+   * An app whose first empty key lookup runs a same-key twin request to completion (on another app)
+   * before the lookup returns, so the request under test only learns about the twin afterwards.
+   */
+  async function appWithTwin(twinBody: unknown, key: string) {
     const { app: twin } = await setup();
-    const key = randomUUID();
-    let twinStatus: number | undefined;
-    // Runs the twin to completion right after this request's first key lookup comes back empty,
-    // so this request then meets the twin's user in the email/phone pre-check.
+    const state: { twinStatus?: number } = {};
     const keyLookups = new WeakSet<object>();
     const interleave: KyselyPlugin = {
       transformQuery: (args) => {
@@ -532,23 +533,48 @@ describe('concurrency', () => {
         return n;
       },
       transformResult: async (args) => {
-        if (twinStatus === undefined && keyLookups.has(args.queryId) && args.result.rows.length === 0) {
-          twinStatus = -1;
-          twinStatus = (await signup(twin, bodyFor(1), { key })).statusCode;
+        if (state.twinStatus === undefined && keyLookups.has(args.queryId) && args.result.rows.length === 0) {
+          state.twinStatus = -1;
+          state.twinStatus = (await signup(twin, twinBody, { key })).statusCode;
         }
         return args.result;
       },
     };
-    const db = testDb().withPlugin(interleave);
     const config = { ...testConfig(), auth: { enabled: true, tokenSecret: AUTH_SECRET } };
-    const app = await buildPublicApp(createTestContext({ config, db }));
+    const app = await buildPublicApp(createTestContext({ config, db: testDb().withPlugin(interleave) }));
     open.push(app);
+    return { app, state };
+  }
+
+  it('a same-key twin that commits between the key lookup and the taken check → replay, not 409', async () => {
+    const key = randomUUID();
+    const { app, state } = await appWithTwin(bodyFor(1), key);
 
     const res = await signup(app, bodyFor(1), { key });
-    expect(twinStatus).toBe(201);
+    expect(state.twinStatus).toBe(201);
     expect(res.statusCode).toBe(201);
     expect(await countRows('users')).toBe(1);
     // Contract §5: a replay does not count, even one discovered after the attempt was recorded.
+    expect(await countRows('signup_phone_attempts')).toBe(1);
+  });
+
+  it('a late-detected replay gives its per-IP hit back', async () => {
+    const key = randomUUID();
+    const { app } = await appWithTwin(bodyFor(1), key);
+    expect((await signup(app, bodyFor(1), { key })).statusCode).toBe(201);
+    // The replay above must not count, so this app still allows the full 5 new sign-ups for the IP.
+    for (let n = 2; n <= 6; n++) expect((await signup(app, bodyFor(n))).statusCode).toBe(201);
+    expect((await signup(app, bodyFor(7))).statusCode).toBe(429);
+  });
+
+  it('a same-key twin with another body → 422, and the 422 uses no phone attempt', async () => {
+    const key = randomUUID();
+    const { app, state } = await appWithTwin(bodyFor(1), key);
+
+    const res = await signup(app, bodyFor(2), { key });
+    expect(state.twinStatus).toBe(201);
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error.code).toBe('idempotency_key_reused');
     expect(await countRows('signup_phone_attempts')).toBe(1);
   });
 
