@@ -345,7 +345,16 @@ export async function signupRoutes(app: PublicApp, ctx: AppContext): Promise<voi
     await recordPhoneAttempt(ctx, input.phone, ctx.clock.now());
 
     const taken = await findTaken(ctx.db, input.email, input.phone);
-    if (taken) throw taken;
+    if (taken) {
+      // A parallel request with this key may have committed since the lookup above: then the
+      // clash is with our own account, and the answer is its replay, not a 409.
+      const committed = await findStoredKey(ctx.db, idempotencyKey, ctx.clock.now());
+      if (!committed) throw taken;
+      const replay = await answerReplay(ctx, keys, committed, hmac, input);
+      ctx.metrics.inc(METRICS.authSignups, { result: 'replay' });
+      req.log.info({ userId: replay.user.id }, 'sign-up replayed');
+      return reply.status(201).send(replay);
+    }
 
     const passwordHash = await hashPassword(input.password);
     let created: SignupResponse;

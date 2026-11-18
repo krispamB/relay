@@ -6,7 +6,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
-import { sql } from 'kysely';
+import { type KyselyPlugin, sql } from 'kysely';
 import { type Logger, pino } from 'pino';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildPublicApp } from '../../src/app.js';
@@ -516,6 +516,40 @@ describe('rate limits', () => {
 });
 
 describe('concurrency', () => {
+  it('a same-key twin that commits between the key lookup and the taken check → replay, not 409', async () => {
+    const { app: twin } = await setup();
+    const key = randomUUID();
+    let twinStatus: number | undefined;
+    // Runs the twin to completion right after this request's first key lookup comes back empty,
+    // so this request then meets the twin's user in the email/phone pre-check.
+    const keyLookups = new WeakSet<object>();
+    const interleave: KyselyPlugin = {
+      transformQuery: (args) => {
+        const n = args.node;
+        if (n.kind === 'SelectQueryNode' && JSON.stringify(n.from).includes('signup_idempotency')) {
+          keyLookups.add(args.queryId);
+        }
+        return n;
+      },
+      transformResult: async (args) => {
+        if (twinStatus === undefined && keyLookups.has(args.queryId) && args.result.rows.length === 0) {
+          twinStatus = -1;
+          twinStatus = (await signup(twin, bodyFor(1), { key })).statusCode;
+        }
+        return args.result;
+      },
+    };
+    const db = testDb().withPlugin(interleave);
+    const config = { ...testConfig(), auth: { enabled: true, tokenSecret: AUTH_SECRET } };
+    const app = await buildPublicApp(createTestContext({ config, db }));
+    open.push(app);
+
+    const res = await signup(app, bodyFor(1), { key });
+    expect(twinStatus).toBe(201);
+    expect(res.statusCode).toBe(201);
+    expect(await countRows('users')).toBe(1);
+  });
+
   it('identical concurrent requests (same key, same body) → one user, every answer the same user', async () => {
     const { app } = await setup();
     const key = randomUUID();
