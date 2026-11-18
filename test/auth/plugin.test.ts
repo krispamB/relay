@@ -87,7 +87,7 @@ async function setup(opts: { auth?: boolean; perIp?: number } = {}) {
   const base = testConfig();
   const config = {
     ...base,
-    auth: opts.auth === false ? base.auth : AUTH_ON,
+    auth: opts.auth === false ? { ...base.auth, enabled: false } : AUTH_ON,
     limits: { ...base.limits, ...(opts.perIp === undefined ? {} : { requestsPerIpPerMinute: opts.perIp }) },
   };
   const ctx = createTestContext({ config });

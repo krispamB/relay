@@ -66,7 +66,11 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     statusTokenSecret: 'status-token-secret-for-tests-0123456789',
     phoneHashSecret: 'phone-hash-secret-for-tests-01234567890',
     adminToken: 'admin-token-for-tests-0123456789abcdef',
-    auth: { enabled: false, tokenSecret: 'auth-token-secret-for-tests-0123456789ab' },
+    // TEST_AUTH_ENABLED=true runs the whole suite with the auth plugin mounted (README, "Local development").
+    auth: {
+      enabled: process.env.TEST_AUTH_ENABLED === 'true',
+      tokenSecret: 'auth-token-secret-for-tests-0123456789ab',
+    },
     alertWebhookUrl: undefined,
     demoDispatchAfterS: 30,
     demoCloseAfterS: 90,
