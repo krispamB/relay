@@ -9,6 +9,7 @@ import Fastify, {
   type RawServerDefault,
 } from 'fastify';
 import { sql } from 'kysely';
+import { authPlugin } from './auth/plugin.js';
 import { MINUTE } from './clock.js';
 import type { AppContext } from './context.js';
 import { ApiError, errors, safeError } from './errors.js';
@@ -141,7 +142,13 @@ export async function buildPublicApp(ctx: AppContext): Promise<PublicApp> {
     openapi: {
       info: { title: 'SOS Relay public API', version: '1.0.0' },
       components: {
-        securitySchemes: { deviceToken: { type: 'http', scheme: 'bearer' } },
+        securitySchemes: {
+          deviceToken: { type: 'http', scheme: 'bearer' },
+          // The auth endpoints' own bearer token, never accepted in place of a device token.
+          ...(ctx.config.auth.enabled
+            ? { accessToken: { type: 'http' as const, scheme: 'bearer', bearerFormat: 'JWT' } }
+            : {}),
+        },
       },
     },
   });
@@ -171,6 +178,9 @@ export async function buildPublicApp(ctx: AppContext): Promise<PublicApp> {
   await devicesRoutes(app, ctx);
   await sosRoutes(app, ctx);
   await statusRoutes(app, ctx);
+
+  // Encapsulated: its own error handler. Registered after the per-IP limiter hook, which it inherits.
+  if (ctx.config.auth.enabled) await app.register(authPlugin, { ctx });
 
   return app;
 }
