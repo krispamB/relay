@@ -163,7 +163,13 @@ Phone sign-in is always on. The same **access token** goes on `POST /v1/sos`, st
 
 ## Live status (WebSocket)
 
-[`docs/app-api-contract.md`](docs/app-api-contract.md) §5 defines **`GET /v1/live`**: a WebSocket that pushes versioned snapshots while the caller subscribes and pings. Today, **`GET /v1/sos/{receiptId}/status`** already returns that snapshot over HTTP (same JSON, including `"type": "state"`); it does not mark the SOS as watched, so unit polling stays on the slow schedule until the socket lands.
+**`GET /v1/live`** is a WebSocket that pushes versioned snapshots of one SOS while the caller watches it ([`docs/app-api-contract.md`](docs/app-api-contract.md) §5 has the messages, error codes and close codes). The app authenticates with `Authorization: Bearer` on the upgrade (or a first `{type:"auth"}` message within 5 s), re-authenticates in-band before the 15-minute token expires, sends `subscribe` with its `receiptId`, a `ping` every 25 s and its `location`. Each subscribe and ping marks the SOS watched for 60 s, which switches on fast Core polling and unit positions. **`GET /v1/sos/{receiptId}/status`** returns the same snapshot over HTTP but does not count as watching.
+
+- **Fan-out.** Every change the snapshot shows bumps `live_version` and sends `NOTIFY sos_live` in its transaction. Each instance holds one dedicated `LISTEN` connection (application name `sos-relay-live`, outside the pool, opened with its first socket), reads the snapshot once per notification and sends it to its sockets for that SOS; a socket never gets a lower version than it already has. If that connection drops it reconnects with backoff (0.5 s doubling to 30 s) and re-pushes every snapshot. This works on one instance and on several with no change.
+- **Revocation.** A trigger on `token_families` (migration 008) sends `NOTIFY session_revoked` with the family id inside every transaction that revokes or deletes a session (sign-out, refresh-token reuse, account deletion, an operator's SQL); every instance closes that session's sockets with 4003. Each message on a socket also re-checks the token and session, as a backstop.
+- **Caller location** is stored on the submission (`live_lat`, `live_lon`, `live_at`) for `distanceM` only, at most one fix per 5 s per SOS (enforced in the `UPDATE`, so across instances), and never sent to Core. Tokens and locations are on the log redaction list.
+- **Limits.** Frames of at most 8 KB (bigger: close 1009); 20 messages per 10 s per socket; 5 signed-in sockets per user per instance (one more: close 4029); a socket with more than 64 KB unsent is dropped. These are constants in `src/live/socket.ts`, not environment variables.
+- **Deploys.** On shutdown every socket is closed with 1012 (the app reconnects with backoff) before the database pool closes.
 
 ## Deploying on Railway
 

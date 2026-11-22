@@ -360,21 +360,48 @@ while the caller watches their SOS. Caller movement is sent on the socket and **
 
 ### 5.1 Connection and auth
 
-- Prefer **`Authorization: Bearer <accessToken>` on the HTTP upgrade**.
-- If the upgrade had no token, the **first message within 5 seconds** must be
-  `{ "type": "auth", "token": "<accessToken>" }`.
-- **Re-authenticate in-band** with `{type:"auth"}` before the access token expires (15 minutes).
-  Otherwise the relay closes with **4001**.
-- Revoking the session closes open sockets with **4003**.
+- The upgrade is always accepted. Every refusal arrives as a **close code** on the socket (§5.4),
+  never as an HTTP status, so a React Native client can read it. A plain HTTP `GET /v1/live` with no
+  upgrade is a 404.
+- Prefer **`Authorization: Bearer <accessToken>` on the HTTP upgrade**. A token in the URL is not read.
+- If the upgrade had no `Authorization` header, the **first message within 5 seconds** must be
+  `{ "type": "auth", "token": "<accessToken>" }`. No answer is sent for a good token: send your
+  `subscribe` straight after it. Any other first message, or nothing within 5 s, is closed **4001**.
+- A bad upgrade token (forged, malformed, expired) is closed **4001**. A token whose session has been
+  revoked (sign-out, refresh-token reuse, the account deleted) is closed **4003**.
+- **Re-authenticate in-band** with `{type:"auth"}` before the access token expires (15 minutes), for
+  example right after each refresh. The new token must be the **same user's**; another user's is
+  closed **4001**. If the token expires with no re-auth, the relay closes **4001** at its `exp`.
+- Revoking the session closes its open sockets with **4003**, on every relay instance, within a moment
+  of the revocation. A socket of the same user's other session (another device) stays open.
+- At most **5 signed-in sockets per user per relay instance**. One more is closed **4029**. A socket
+  the app has lost track of frees its place when it misses its pings (4008 after 60 s).
 
 ### 5.2 App → relay messages
 
+Text frames of JSON, at most **8 KB** each. A bigger frame is closed **1009**. Messages are handled in
+the order they arrive.
+
 | Message | Effect |
 |---|---|
-| `{ "type": "auth", "token" }` | As above. Must be the same user on reconnect. |
-| `{ "type": "subscribe", "receiptId" }` | Watch one SOS. Relay answers with a snapshot. **One SOS per socket**; a second subscribe replaces the first. Not owner → close **4004**. |
-| `{ "type": "location", "lat", "lon", "accuracyM?", "capturedAt" }` | Caller position. Same validation as SOS `location`. Stored on the submission; at most one stored every 5 s; extras ignored. |
-| `{ "type": "ping" }` | Every **25 s**. Refreshes `live_watch_until`. Answered with `{ "type": "pong" }`. |
+| `{ "type": "auth", "token" }` | As above: the first message when the upgrade had no header, and a re-auth before each expiry. |
+| `{ "type": "subscribe", "receiptId" }` | Watch one SOS. Relay answers with its snapshot and treats the SOS as watched for 60 s (fast polling). **One SOS per socket**; a second subscribe replaces the first, and no more snapshots of the first are sent. Not this user's SOS, unknown, purged, or not a receipt id → close **4004**. A `closed` or `failed` SOS → its final snapshot, then close **1000**. |
+| `{ "type": "location", "lat", "lon", "accuracyM?", "capturedAt" }` | Caller position. Same rules as the SOS `location` (at most 10 minutes old, not in the future beyond 30 s of clock skew, not 0,0). Stored on the relay for the subscribed SOS while it is open, for `distanceM`; **never sent to Core**. At most one is stored every 5 s per SOS (across devices and relay instances); extras, and a fix older than the one stored, are ignored without an answer. A stored fix comes back as a new snapshot. |
+| `{ "type": "ping" }` | Every **25 s**. Refreshes the 60 s watch of the subscribed SOS. Answered with `{ "type": "pong" }`. Only a `ping` counts as the heartbeat: no ping for 60 s → close **4008**. |
+
+**Errors that keep the socket open.** The relay answers `{ "type": "error", "code" }` and does nothing
+else with the message:
+
+| `code` | When | App does |
+|---|---|---|
+| `bad_message` | Not JSON, a binary frame, an unknown `type`, or missing, extra or ill-typed fields. | Fix the client; do not resend as is. |
+| `not_subscribed` | A `location` before any `subscribe` on this socket. | Subscribe first. |
+| `invalid_location` | A `location` that fails the rules above. | Send a fresh fix. |
+| `rate_limited` | More than **20 messages in 10 s** on one socket. | Slow down; the message was dropped. |
+| `unavailable` | The relay could not reach its database for this message. | Send it again in a few seconds. |
+
+Every message after auth also re-checks the session, so a revoked or expired token is closed (4003,
+4001) on the next message even if the relay missed the revocation notice.
 
 ### 5.3 Snapshot (`state` message)
 
@@ -423,19 +450,27 @@ HTTP `GET /v1/sos/:receiptId/status` returns this same object, `"type": "state"`
 `updatedAt` is the time of the last **status** change (not of a unit or recording change; those
 show in `version`).
 
-Relay may also send `{ "type": "pong" }` and `{ "type": "error", "code" }` (shape TBD in build for
-non-fatal protocol errors).
+Relay → app messages are `{ "type": "state", … }`, `{ "type": "pong" }` and
+`{ "type": "error", "code" }` (§5.2). A socket never receives a `version` lower than one it has
+already received for that SOS; after a relay reconnects to its database it may resend the current
+snapshot with the same `version`, which the app can ignore.
 
 ### 5.4 Close codes
 
 | Code | Meaning | App does |
 |---|---|---|
 | **1000** | SOS final (`closed` or `failed`). | Stop. Show final state. |
-| **4001** | No valid token in time, or token expired. | Refresh session, reconnect. |
+| **1009** | A frame over 8 KB. | Fix the client. |
+| **1012** | Relay restarting (deploy). | Reconnect with backoff. |
+| **1013** | The relay could not check the token (database unreachable). | Reconnect with backoff. |
+| **4001** | No valid token in time, the token expired, or a re-auth was another user's. | Refresh session, reconnect. |
 | **4003** | Session revoked. | Sign out. |
 | **4004** | No such SOS for this user, or purged. | Stop. |
 | **4008** | No ping for 60 s. | Reconnect. |
-| **1012** | Relay restarting (deploy). | Reconnect with backoff. |
+| **4029** | Already 5 sockets for this user on this relay instance. | Close the sockets you no longer use; reconnect with backoff. |
+
+A socket that stops reading (more than 64 KB of snapshots unsent) is dropped without a close code
+(1006). Snapshots are whole states, so nothing is lost: reconnect and subscribe again.
 
 After the **24 h** tracking window the SOS becomes `closed`; subscribe delivers the final snapshot
 then **1000**. After the **30-day** purge, subscribe yields **4004**.
@@ -506,6 +541,9 @@ Defaults (deployment may change). `retryAfterSeconds` says how long to wait.
 | Whole intake | 30 SOS per 10 min | 503 `intake_busy` |
 | Status polls per receipt | 1 per 5 s | 429 |
 | Any request per network address | 120 per minute | 429 |
+| Live socket messages | 20 per 10 s per socket | `{type:"error", code:"rate_limited"}` |
+| Live sockets | 5 per user per relay instance | close 4029 |
+| Socket locations stored | 1 per 5 s per SOS | extras ignored |
 
 Auth limits are in [`auth-contract.md`](auth-contract.md). Accepted SOS count toward limits;
 refusals and replays do not. Demo counters are separate.
