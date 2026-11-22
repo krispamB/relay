@@ -14,33 +14,6 @@ export type CheckStatus = 'unknown' | 'ok' | 'unhealthy';
 
 export const OPEN_STATUSES: readonly SubmissionStatus[] = ['queued', 'received', 'dispatched'];
 
-export interface DevicesTable {
-  id: string;
-  platform: Platform;
-  token_hash: string;
-  token_expires_at: Timestamp;
-  attested: boolean;
-  ios_key_id: string | null;
-  ios_public_key: string | null;
-  ios_counter: BigIntCol;
-  phone_verified_at: ColumnType<Date | null, Date | null | undefined, Date | null>;
-  created_at: Timestamp;
-  updated_at: Timestamp;
-}
-
-export interface DeviceRegistrationsTable {
-  id: Generated<string>;
-  device_id: string;
-  ip_hash: string;
-  created_at: Timestamp;
-}
-
-export interface NoncesTable {
-  nonce: string;
-  expires_at: Timestamp;
-  used_at: ColumnType<Date | null, Date | null | undefined, Date | null>;
-}
-
 type NullableTimestamp = ColumnType<Date | null, Date | null | undefined, Date | null>;
 
 export interface SubmissionsTable {
@@ -222,9 +195,6 @@ export interface SubmissionUnitsTable {
 }
 
 export interface Database {
-  devices: DevicesTable;
-  device_registrations: DeviceRegistrationsTable;
-  nonces: NoncesTable;
   submissions: SubmissionsTable;
   submission_events: SubmissionEventsTable;
   strikes: StrikesTable;
@@ -241,7 +211,6 @@ export interface Database {
   submission_units: SubmissionUnitsTable;
 }
 
-export type Device = Selectable<DevicesTable>;
 export type Submission = Selectable<SubmissionsTable>;
 export type NewSubmission = Insertable<SubmissionsTable>;
 export type SubmissionUpdate = Updateable<SubmissionsTable>;

@@ -1,7 +1,6 @@
 import { sql } from 'kysely';
 import { inject } from 'vitest';
 import { RecordingAlerter } from '../../src/alerts.js';
-import type { AttestationService } from '../../src/attestation/types.js';
 import { FakeClock } from '../../src/clock.js';
 import { type Config, DEFAULT_LIMITS, DEFAULT_SOS_NATURE_TEXT } from '../../src/config.js';
 import type { AppContext } from '../../src/context.js';
@@ -54,16 +53,6 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     },
     intakesFile: '(test)',
     intakesJson: undefined,
-    attestation: {
-      mode: 'permissive',
-      androidPackageName: 'org.example.sos',
-      androidCertSha256: ['AA:BB'],
-      googleServiceAccountJson: undefined,
-      iosTeamId: 'TEAMID1234',
-      iosBundleId: 'org.example.sos',
-      iosAppAttestEnv: 'development',
-    },
-    statusTokenSecret: 'status-token-secret-for-tests-0123456789',
     phoneHashSecret: 'phone-hash-secret-for-tests-01234567890',
     adminToken: 'admin-token-for-tests-0123456789abcdef',
     auth: { tokenSecret: 'auth-token-secret-for-tests-0123456789ab' },
@@ -75,16 +64,6 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     ...overrides,
   };
 }
-
-/** Accepts everything without verifying, like permissive mode with no attestation sent. */
-export const acceptAllAttestation: AttestationService = {
-  async verifyRegistration() {
-    return { accepted: true, attested: false };
-  },
-  async verifyRequest() {
-    return { accepted: true, attested: false };
-  },
-};
 
 /** A Core client that fails the test if anything calls it. Override the methods a test needs. */
 export function unusedCore(): CoreClient {
@@ -121,7 +100,7 @@ export async function closeTestDb(): Promise<void> {
 
 /** Empties every table and restores the single relay_state row. Call in beforeEach. */
 export async function resetDb(db: Db = testDb()): Promise<void> {
-  await sql`TRUNCATE submission_units, recordings, signin_attempts, signup_phone_attempts, signup_idempotency, refresh_tokens, token_families, users, submission_events, submissions, device_registrations, devices, nonces, strikes, blocks, alert_log, relay_state RESTART IDENTITY CASCADE`.execute(
+  await sql`TRUNCATE submission_units, recordings, signin_attempts, signup_phone_attempts, signup_idempotency, refresh_tokens, token_families, users, submission_events, submissions, strikes, blocks, alert_log, relay_state RESTART IDENTITY CASCADE`.execute(
     db,
   );
   await sql`INSERT INTO relay_state (id) VALUES (1)`.execute(db);
@@ -146,7 +125,6 @@ export function createTestContext(overrides: Partial<AppContext> & { config?: Co
     log: silentLogger(),
     intakes: testIntakes(),
     core: unusedCore(),
-    attestation: acceptAllAttestation,
     metrics: new NoopMetrics(),
     ...overrides,
     clock,

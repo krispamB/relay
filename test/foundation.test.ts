@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildPublicApp, WindowLimiter } from '../src/app.js';
 import { DAY } from '../src/clock.js';
 import { ConfigError, loadConfig } from '../src/config.js';
-import { bindingHash, safeEqual, statusTokenFor } from '../src/crypto.js';
+import { safeEqual } from '../src/crypto.js';
 import { isUniqueViolation } from '../src/db/index.js';
 import { newReceiptId, newReference, RECEIPT_ID_PATTERN, REFERENCE_ALPHABET } from '../src/ids.js';
 import { parseIntakes } from '../src/intakes.js';
@@ -17,8 +17,6 @@ const baseEnv = {
   RESGRID_CALL_TYPE_NAME: 'Public SOS',
   RESGRID_PRIORITY_ID: '3',
   INTAKES_FILE: './intakes.json',
-  ATTESTATION_MODE: 'permissive',
-  STATUS_TOKEN_SECRET: 'a'.repeat(32),
   PHONE_HASH_SECRET: 'b'.repeat(32),
   ADMIN_TOKEN: 'c'.repeat(32),
   AUTH_TOKEN_SECRET: 'd'.repeat(32),
@@ -43,14 +41,20 @@ describe('config', () => {
     }
   });
 
-  it('refuses permissive mode in production without the override', () => {
-    const prod = { ...baseEnv, NODE_ENV: 'production', CLIENT_IP_HEADER: 'x-real-ip' };
-    expect(() => loadConfig(prod)).toThrow(/permissive/);
-    expect(() => loadConfig({ ...prod, ALLOW_PERMISSIVE_IN_PRODUCTION: 'true' })).not.toThrow();
+  it('has no attestation or status-token settings: the device model is gone', () => {
+    const c = loadConfig({
+      ...baseEnv,
+      ATTESTATION_MODE: 'not-a-mode',
+      STATUS_TOKEN_SECRET: 'short',
+      GOOGLE_SERVICE_ACCOUNT_JSON: '{not json',
+    });
+    expect(c).not.toHaveProperty('attestation');
+    expect(c).not.toHaveProperty('statusTokenSecret');
+    expect(c.limits).not.toHaveProperty('registrationsPerIpPerHour');
   });
 
   it('needs the client IP header in production, so callers never share one rate limit', () => {
-    const prod = { ...baseEnv, NODE_ENV: 'production', ALLOW_PERMISSIVE_IN_PRODUCTION: 'true' };
+    const prod = { ...baseEnv, NODE_ENV: 'production' };
     expect(() => loadConfig(prod)).toThrow(/CLIENT_IP_HEADER/);
     expect(() => loadConfig({ ...prod, CLIENT_IP_HEADER: 'X-Real-IP' })).not.toThrow();
     expect(() => loadConfig({ ...prod, ALLOW_SOCKET_IP_IN_PRODUCTION: 'true' })).not.toThrow();
@@ -80,13 +84,6 @@ describe('config', () => {
     expect(() => loadConfig({ ...baseEnv, SOS_NATURE_TEXT: 'x'.repeat(201) })).toThrow(/SOS_NATURE_TEXT/);
     expect(() => loadConfig({ ...baseEnv, SOS_NATURE_TEXT: 'SOS\u0007' })).toThrow(/SOS_NATURE_TEXT/);
   });
-
-  it('needs platform settings in enforce mode', () => {
-    expect(() => loadConfig({ ...baseEnv, ATTESTATION_MODE: 'enforce' })).toThrow(/enforce/);
-    expect(() =>
-      loadConfig({ ...baseEnv, ATTESTATION_MODE: 'enforce', IOS_TEAM_ID: 'T', IOS_BUNDLE_ID: 'b' }),
-    ).not.toThrow();
-  });
 });
 
 describe('intakes', () => {
@@ -114,18 +111,9 @@ describe('ids and crypto', () => {
     for (const ch of ref.slice(4)) expect(REFERENCE_ALPHABET).toContain(ch);
     expect(REFERENCE_ALPHABET).not.toMatch(/[01OIL]/);
   });
-  it('derives a stable status token and compares safely', () => {
-    const t = statusTokenFor('secret', 'sos_1');
-    expect(statusTokenFor('secret', 'sos_1')).toBe(t);
-    expect(statusTokenFor('secret', 'sos_2')).not.toBe(t);
-    expect(safeEqual(t, t)).toBe(true);
-    expect(safeEqual(t, `${t}x`)).toBe(false);
-  });
-  it('binds the hash to key and exact body bytes', () => {
-    const a = bindingHash('k', Buffer.from('{"a":1}'));
-    expect(a.length).toBe(32);
-    expect(bindingHash('k', Buffer.from('{"a": 1}')).equals(a)).toBe(false);
-    expect(bindingHash('k2', Buffer.from('{"a":1}')).equals(a)).toBe(false);
+  it('compares safely', () => {
+    expect(safeEqual('abc', 'abc')).toBe(true);
+    expect(safeEqual('abc', 'abcx')).toBe(false);
   });
 });
 

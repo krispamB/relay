@@ -13,8 +13,6 @@ export const METRICS = {
   submissions: 'sos_submissions_total',
   /** counter {endpoint, result: ok|auth|conflict|rejected|retryable} */
   coreCalls: 'sos_core_calls_total',
-  /** counter {platform, phase: register|request, result: ok|failed|missing} */
-  attestations: 'sos_attestations_total',
   /** counter {rule} */
   rateLimited: 'sos_rate_limited_total',
   /** histogram {endpoint} */

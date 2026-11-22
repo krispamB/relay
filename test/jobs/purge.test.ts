@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { DAY, HOUR, SECOND } from '../../src/clock.js';
 import { createPurgeJob, PURGE_BATCH, runPurgePass } from '../../src/jobs/purge.js';
 import { closeTestDb, createTestContext, resetDb } from '../helpers/context.js';
-import { insertDevice, insertSubmissionOn, insertUser } from './fixtures.js';
+import { insertSubmissionOn, insertUser } from './fixtures.js';
 
 beforeEach(() => resetDb());
 afterAll(() => closeTestDb());
@@ -10,7 +10,7 @@ afterAll(() => closeTestDb());
 const ago = (now: Date, ms: number) => new Date(now.getTime() - ms);
 const ahead = (now: Date, ms: number) => new Date(now.getTime() + ms);
 
-async function ids(ctx: ReturnType<typeof createTestContext>, table: 'submissions' | 'devices' | 'blocks') {
+async function ids(ctx: ReturnType<typeof createTestContext>, table: 'submissions' | 'blocks') {
   return (await ctx.db.selectFrom(table).select('id').orderBy('id').execute()).map((r) => r.id);
 }
 
@@ -47,22 +47,6 @@ describe('purge job (PRD §10.5)', () => {
     expect(events.map((e) => e.submission_id)).toEqual([young]);
   });
 
-  it('deletes devices whose token expired over 30 days ago', async () => {
-    const ctx = createTestContext();
-    const now = ctx.clock.now();
-    const gone = await insertDevice(ctx.db, now, { tokenExpiresAt: ago(now, 30 * DAY + SECOND) });
-    const recentExpiry = await insertDevice(ctx.db, now, { tokenExpiresAt: ago(now, 29 * DAY) });
-    await ctx.db
-      .insertInto('device_registrations')
-      .values({ device_id: gone, ip_hash: 'iph', created_at: ago(now, 60 * DAY) })
-      .execute();
-
-    const counts = await runPurgePass(ctx);
-    expect(counts.devices).toBe(1);
-    expect(await ids(ctx, 'devices')).toEqual([recentExpiry]);
-    expect(await ctx.db.selectFrom('device_registrations').selectAll().execute()).toEqual([]);
-  });
-
   it('keeps users when their submissions age out', async () => {
     const ctx = createTestContext();
     const now = ctx.clock.now();
@@ -73,7 +57,7 @@ describe('purge job (PRD §10.5)', () => {
     expect((await ctx.db.selectFrom('users').select('id').execute()).map((r) => r.id)).toEqual([user]);
   });
 
-  it('deletes expired strikes, blocks and nonces, and keeps live ones', async () => {
+  it('deletes expired strikes and blocks, and keeps live ones', async () => {
     const ctx = createTestContext();
     const now = ctx.clock.now();
     await ctx.db
@@ -112,23 +96,12 @@ describe('purge job (PRD §10.5)', () => {
         block('blk_forever', null, 'manual'),
       ])
       .execute();
-    await ctx.db
-      .insertInto('nonces')
-      .values([
-        { nonce: 'n-old', expires_at: ago(now, SECOND) },
-        { nonce: 'n-live', expires_at: ahead(now, 60 * SECOND) },
-      ])
-      .execute();
-
     const counts = await runPurgePass(ctx);
-    expect(counts).toMatchObject({ strikes: 1, blocks: 1, nonces: 1 });
+    expect(counts).toMatchObject({ strikes: 1, blocks: 1 });
     expect(
       (await ctx.db.selectFrom('strikes').select('submission_id').execute()).map((s) => s.submission_id),
     ).toEqual(['s2']);
     expect(await ids(ctx, 'blocks')).toEqual(['blk_forever', 'blk_live']);
-    expect((await ctx.db.selectFrom('nonces').select('nonce').execute()).map((n) => n.nonce)).toEqual([
-      'n-live',
-    ]);
 
     // A day later the live strike and block are gone too.
     ctx.clock.advance(DAY);
@@ -158,11 +131,19 @@ describe('purge job (PRD §10.5)', () => {
     const now = ctx.clock.now();
     const n = PURGE_BATCH * 2 + 7;
     await ctx.db
-      .insertInto('nonces')
-      .values(Array.from({ length: n }, (_, i) => ({ nonce: `n${i}`, expires_at: ago(now, SECOND) })))
+      .insertInto('strikes')
+      .values(
+        Array.from({ length: n }, (_, i) => ({
+          subject_type: 'phone' as const,
+          subject: 'ph',
+          submission_id: `sos_${i}`,
+          created_at: ago(now, 30 * DAY),
+          expires_at: ago(now, SECOND),
+        })),
+      )
       .execute();
-    expect((await runPurgePass(ctx)).nonces).toBe(n);
-    expect(await ctx.db.selectFrom('nonces').selectAll().execute()).toEqual([]);
+    expect((await runPurgePass(ctx)).strikes).toBe(n);
+    expect(await ctx.db.selectFrom('strikes').selectAll().execute()).toEqual([]);
   });
 
   it('logs counts only', async () => {

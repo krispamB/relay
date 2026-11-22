@@ -94,3 +94,8 @@ CREATE TABLE submission_units (
   status_at      timestamptz,
   PRIMARY KEY (submission_id, unit_key)
 );
+
+-- The device model is gone (plan D19): no device tokens, registrations or attestation nonces.
+DROP TABLE device_registrations;
+DROP TABLE nonces;
+DROP TABLE devices;

@@ -166,9 +166,8 @@ describe('the auth plugin', () => {
     const op = doc.paths['/v1/auth/_documented']?.post;
     expect(op?.tags).toEqual(['auth']);
     expect(op?.security).toEqual([{ accessToken: [] }]);
-    expect(doc.components.securitySchemes).toMatchObject({
-      deviceToken: { type: 'http', scheme: 'bearer' },
-      accessToken: { type: 'http', scheme: 'bearer' },
+    expect(doc.components.securitySchemes).toEqual({
+      accessToken: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
     });
   });
 });

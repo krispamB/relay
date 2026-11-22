@@ -2,7 +2,7 @@
  * Renders the public API's OpenAPI document, exactly as the relay serves it at GET /v1/openapi.json.
  *
  * The public app is built with a stand-in context: building the routes needs the configuration's
- * shape, never a database, Core or attestation. Nothing here connects anywhere.
+ * shape, never a database or Core. Nothing here connects anywhere.
  * Used by scripts/export-openapi.ts (writes docs/openapi.json) and by test/docs/openapi.test.ts
  * (fails when the committed file is out of date).
  */
@@ -42,16 +42,6 @@ function standInConfig(): Config {
     },
     intakesFile: undefined,
     intakesJson: '[]',
-    attestation: {
-      mode: 'permissive',
-      androidPackageName: undefined,
-      androidCertSha256: [],
-      googleServiceAccountJson: undefined,
-      iosTeamId: undefined,
-      iosBundleId: undefined,
-      iosAppAttestEnv: 'production',
-    },
-    statusTokenSecret: 'unused',
     phoneHashSecret: 'unused',
     adminToken: 'unused',
     // The secret is never used: no token is signed here.
@@ -84,7 +74,6 @@ export async function renderOpenApi(): Promise<string> {
     log: silentLogger(),
     intakes: new Intakes([]),
     core,
-    attestation: { verifyRegistration: notUsed('Attestation'), verifyRequest: notUsed('Attestation') },
     alerts: new NoopAlerter(),
     metrics: new NoopMetrics(),
   };

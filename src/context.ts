@@ -1,5 +1,4 @@
 import type { Alerter } from './alerts.js';
-import type { AttestationService } from './attestation/types.js';
 import type { Clock } from './clock.js';
 import type { Config } from './config.js';
 import type { CoreClient } from './core/types.js';
@@ -16,7 +15,6 @@ export interface AppContext {
   log: Logger;
   intakes: Intakes;
   core: CoreClient;
-  attestation: AttestationService;
   alerts: Alerter;
   metrics: Metrics;
 }

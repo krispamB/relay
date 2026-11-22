@@ -1,12 +1,9 @@
 /** Environment configuration. See sos-relay-PRD.md §13.1. Fails fast with every problem listed. */
 
-export type AttestationMode = 'enforce' | 'permissive';
-
 export interface Limits {
   sosPerUserPer24h: number;
   sosPerPhonePer24h: number;
   sosPerIpPerHour: number;
-  registrationsPerIpPerHour: number;
   intakeBreakerCount: number;
   intakeBreakerWindowS: number;
   statusPollMinIntervalS: number;
@@ -39,16 +36,6 @@ export interface Config {
   intakesFile: string | undefined;
   /** The intakes JSON inline, for platforms without a writable file system (Railway). */
   intakesJson: string | undefined;
-  attestation: {
-    mode: AttestationMode;
-    androidPackageName: string | undefined;
-    androidCertSha256: string[];
-    googleServiceAccountJson: string | undefined;
-    iosTeamId: string | undefined;
-    iosBundleId: string | undefined;
-    iosAppAttestEnv: 'production' | 'development';
-  };
-  statusTokenSecret: string;
   phoneHashSecret: string;
   /** Sign-up, sign-in and the session. Always on: the SOS routes need the signed-in user. */
   auth: {
@@ -68,7 +55,6 @@ export const DEFAULT_LIMITS: Limits = {
   sosPerUserPer24h: 3,
   sosPerPhonePer24h: 3,
   sosPerIpPerHour: 10,
-  registrationsPerIpPerHour: 10,
   intakeBreakerCount: 30,
   intakeBreakerWindowS: 600,
   statusPollMinIntervalS: 5,
@@ -84,7 +70,6 @@ const LIMIT_ENV: Record<keyof Limits, string> = {
   sosPerUserPer24h: 'LIMIT_SOS_PER_USER_PER_24H',
   sosPerPhonePer24h: 'LIMIT_SOS_PER_PHONE_PER_24H',
   sosPerIpPerHour: 'LIMIT_SOS_PER_IP_PER_HOUR',
-  registrationsPerIpPerHour: 'LIMIT_REGISTRATIONS_PER_IP_PER_HOUR',
   intakeBreakerCount: 'LIMIT_INTAKE_BREAKER_COUNT',
   intakeBreakerWindowS: 'LIMIT_INTAKE_BREAKER_WINDOW_S',
   statusPollMinIntervalS: 'LIMIT_STATUS_POLL_MIN_INTERVAL_S',
@@ -164,50 +149,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const priorityId = Number(priorityRaw);
   if (priorityRaw && !Number.isInteger(priorityId)) problems.push('RESGRID_PRIORITY_ID must be an integer');
 
-  const modeRaw = get('ATTESTATION_MODE') ?? 'enforce';
-  if (modeRaw !== 'enforce' && modeRaw !== 'permissive') {
-    problems.push('ATTESTATION_MODE must be "enforce" or "permissive"');
-  }
-  const mode = (modeRaw === 'permissive' ? 'permissive' : 'enforce') as AttestationMode;
-  if (mode === 'permissive' && nodeEnv === 'production' && !bool('ALLOW_PERMISSIVE_IN_PRODUCTION', false)) {
-    problems.push(
-      'ATTESTATION_MODE=permissive is refused when NODE_ENV=production (set ALLOW_PERMISSIVE_IN_PRODUCTION=true to override)',
-    );
-  }
-
-  const attestation: Config['attestation'] = {
-    mode,
-    androidPackageName: get('ANDROID_PACKAGE_NAME'),
-    androidCertSha256: (get('ANDROID_CERT_SHA256') ?? '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean),
-    googleServiceAccountJson: get('GOOGLE_SERVICE_ACCOUNT_JSON'),
-    iosTeamId: get('IOS_TEAM_ID'),
-    iosBundleId: get('IOS_BUNDLE_ID'),
-    iosAppAttestEnv: get('IOS_APP_ATTEST_ENV') === 'development' ? 'development' : 'production',
-  };
-  if (mode === 'enforce') {
-    // In enforce mode a platform with missing config simply cannot attest; require at least one platform.
-    const android =
-      attestation.androidPackageName &&
-      attestation.androidCertSha256.length > 0 &&
-      attestation.googleServiceAccountJson;
-    const ios = attestation.iosTeamId && attestation.iosBundleId;
-    if (!android && !ios) {
-      problems.push(
-        'ATTESTATION_MODE=enforce needs Android (ANDROID_PACKAGE_NAME, ANDROID_CERT_SHA256, GOOGLE_SERVICE_ACCOUNT_JSON) or iOS (IOS_TEAM_ID, IOS_BUNDLE_ID) settings',
-      );
-    }
-  }
-  if (attestation.googleServiceAccountJson) {
-    try {
-      JSON.parse(attestation.googleServiceAccountJson);
-    } catch {
-      problems.push('GOOGLE_SERVICE_ACCOUNT_JSON must be valid JSON');
-    }
-  }
-
   const limits = { ...DEFAULT_LIMITS };
   for (const key of Object.keys(LIMIT_ENV) as (keyof Limits)[]) {
     limits[key] = int(LIMIT_ENV[key], DEFAULT_LIMITS[key]);
@@ -243,8 +184,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     },
     intakesFile: get('INTAKES_FILE'),
     intakesJson: get('INTAKES_JSON'),
-    attestation,
-    statusTokenSecret: secret('STATUS_TOKEN_SECRET'),
     phoneHashSecret: secret('PHONE_HASH_SECRET'),
     adminToken: secret('ADMIN_TOKEN'),
     auth: { tokenSecret: secret('AUTH_TOKEN_SECRET') },

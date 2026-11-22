@@ -10,7 +10,6 @@ import { resetSosBudget, setSosBudget } from '../../src/sos/budget.js';
 import { pauseDelivery } from '../../src/state.js';
 import { eventsFor, getSubmission, ok, scriptedCore } from '../delivery/fixtures.js';
 import { closeTestDb, DEMO_INTAKE_CODE, resetDb, TEST_INTAKE_CODE, unusedCore } from '../helpers/context.js';
-import { seedDevice } from '../helpers/seed.js';
 import {
   ADDRESS,
   caller,
@@ -316,12 +315,18 @@ describe('responses (PRD §7.4, app PRD §7.1)', () => {
     expect(await submissionCount(h)).toBe(0);
   });
 
-  it('a relay device token is not an access token: 401 invalid_token', async () => {
+  it('the device model is gone: /v1/devices/* is a 404 and X-Attestation is not a header of the route', async () => {
     h = await harness();
-    const legacy = await seedDevice(h.ctx);
-    const res = await postSos(h.app, { token: legacy.token, body: sosBody(h.ctx) });
-    expect(res.status).toBe(401);
-    expect(res.body.error.code).toBe('invalid_token');
+    for (const [method, url] of [
+      ['GET', '/v1/devices/nonce'],
+      ['POST', '/v1/devices/register'],
+    ] as const) {
+      const res = await h.app.inject({ method, url, ...(method === 'POST' ? { payload: {} } : {}) });
+      expect(res.statusCode).toBe(404);
+    }
+    const doc = (await h.app.inject({ method: 'GET', url: '/v1/openapi.json' })).json();
+    expect(Object.keys(doc.paths).some((p) => p.startsWith('/v1/devices'))).toBe(false);
+    expect(Object.keys(doc.components.securitySchemes)).toEqual(['accessToken']);
   });
 
   it('403 for a blocked user and for a blocked phone number, never saying why', async () => {

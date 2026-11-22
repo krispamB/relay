@@ -9,25 +9,6 @@ import { createTestContext, type TestContext } from '../helpers/context.js';
 
 let seq = 0;
 
-/** A registered device (legacy: devices own no submissions any more). */
-export async function insertDevice(db: Db, at: Date, opts: { id?: string; tokenExpiresAt?: Date } = {}) {
-  seq += 1;
-  const id = opts.id ?? `dev_J${String(seq).padStart(5, '0')}`;
-  await db
-    .insertInto('devices')
-    .values({
-      id,
-      platform: 'android',
-      token_hash: `jobs-hash-${id}`,
-      token_expires_at: opts.tokenExpiresAt ?? at,
-      attested: true,
-      created_at: at,
-      updated_at: at,
-    })
-    .execute();
-  return id;
-}
-
 /** Inserts a user (an account with a unique phone) and returns its id. */
 export async function insertUser(
   db: Db,

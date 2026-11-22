@@ -86,6 +86,15 @@ describe('auth schema (migration 004)', () => {
     expect(r.rows.map((x) => x.column_name)).not.toContain('email');
   });
 
+  it('drops the device model: no devices, device_registrations or nonces table (migration 006)', async () => {
+    const r = await sql<{ table_name: string }>`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name IN ('devices', 'device_registrations', 'nonces')`.execute(
+      testDb(),
+    );
+    expect(r.rows).toEqual([]);
+  });
+
   it('counts sign-in attempts by phone hash, not email hash (migration 006)', async () => {
     const r = await sql<{ column_name: string }>`
       SELECT column_name FROM information_schema.columns
