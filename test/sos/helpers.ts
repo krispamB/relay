@@ -106,6 +106,12 @@ export function slowCore(delayMs: number, result: SaveResult = { kind: 'ok', dat
     getFieldPolicy: async () => {
       throw new Error('unexpected');
     },
+    saveCallFile: async () => {
+      throw new Error('unexpected');
+    },
+    getAllUnitStatuses: async () => {
+      throw new Error('unexpected');
+    },
   };
   return core;
 }

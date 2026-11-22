@@ -77,6 +77,8 @@ export async function renderOpenApi(): Promise<string> {
     getCallTypes: notUsed('Core'),
     getCallPriorities: notUsed('Core'),
     getFieldPolicy: notUsed('Core'),
+    saveCallFile: notUsed('Core'),
+    getAllUnitStatuses: notUsed('Core'),
   };
   const ctx: AppContext = {
     config,
