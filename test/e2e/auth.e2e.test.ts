@@ -129,12 +129,11 @@ async function call(
   return { status: res.statusCode, body };
 }
 
-/** A sign-up body for the n-th user: distinct email, phone and name. */
+/** A sign-up body for the n-th user: distinct phone and name. */
 function signupBody(n: number, overrides: Record<string, unknown> = {}): Json {
   return {
     fullName: `Ada Okafor ${n}`,
     phone: `+23480312345${String(60 + n).padStart(2, '0')}`,
-    email: `ada${n}@example.com`,
     password: PASSWORD,
     device: { platform: 'android', appVersion: '0.3.0', installId: INSTALL_ID },
     ...overrides,
@@ -157,10 +156,10 @@ const me = (accessToken: string) => call('GET', '/v1/me', { headers: bearer(acce
 const refresh = (refreshToken: string) => call('POST', '/v1/auth/refresh', { body: { refreshToken } });
 const signout = (accessToken: string, refreshToken: string) =>
   call('POST', '/v1/auth/signout', { headers: bearer(accessToken), body: { refreshToken } });
-const signin = (email: string, password: string) =>
+const signin = (phone: string, password: string) =>
   call('POST', '/v1/auth/signin', {
     body: {
-      email,
+      phone,
       password,
       device: { platform: 'android', appVersion: '0.3.0', installId: INSTALL_ID },
     },
@@ -189,7 +188,6 @@ describe('docs/auth-contract.md §7: acceptance checklist', () => {
       id: expect.stringMatching(/^[0-9a-f-]{36}$/),
       fullName: 'Ada Okafor 1',
       phone: body.phone,
-      email: 'ada1@example.com',
       phoneVerified: false,
       createdAt: '2026-11-18T12:00:00Z',
     });
@@ -210,7 +208,6 @@ describe('docs/auth-contract.md §7: acceptance checklist', () => {
       signupBody(1, {
         fullName: '   ',
         phone: '0803',
-        email: 'not-an-email',
         password: 'short',
         device: { platform: 'windows', appVersion: 'v'.repeat(33), installId: 'nope' },
       }),
@@ -221,7 +218,6 @@ describe('docs/auth-contract.md §7: acceptance checklist', () => {
     expect(res.body.error.fields).toEqual([
       { field: 'fullName', code: 'too_short' },
       { field: 'phone', code: 'invalid_phone' },
-      { field: 'email', code: 'invalid_email' },
       { field: 'password', code: 'too_short' },
       { field: 'device.platform', code: 'invalid_value' },
       { field: 'device.appVersion', code: 'too_long' },
@@ -231,18 +227,11 @@ describe('docs/auth-contract.md §7: acceptance checklist', () => {
     expect(users).toHaveLength(0);
   });
 
-  it('A duplicate email returns 409 `email_taken`, including when it differs only in case (`ADA@example.com`).', async () => {
-    await newUser({ email: 'ada@example.com' });
-
-    const same = await signup(signupBody(2, { email: 'ada@example.com' }));
-    const upper = await signup(signupBody(3, { email: 'ADA@example.com' }));
-
-    expect(same.status).toBe(409);
-    expect(same.body.error.code).toBe('email_taken');
-    expect(upper.status).toBe(409);
-    expect(upper.body.error.code).toBe('email_taken');
-    const users = await ctx.db.selectFrom('users').select('email').execute();
-    expect(users.map((u) => u.email)).toEqual(['ada@example.com']);
+  it('A sign-up with an `email` field returns 400 `validation_failed`: email is no longer part of an account.', async () => {
+    const res = await signup(signupBody(1, { email: 'ada@example.com' }));
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('validation_failed');
+    expect(res.body.error.fields).toEqual([{ field: 'email', code: 'invalid_value' }]);
   });
 
   it('A duplicate phone number returns 409 `phone_taken`.', async () => {
@@ -369,7 +358,7 @@ describe('docs/auth-contract.md §7: acceptance checklist', () => {
     expect(ended.status).toBe(204);
     expect((await refresh(created.session.refreshToken)).body.error.code).toBe('session_revoked');
 
-    const again = await signin(created.user.email, PASSWORD);
+    const again = await signin(created.user.phone, PASSWORD);
 
     expect(again.status).toBe(200);
     expect(again.body.user).toEqual(created.user);
@@ -378,10 +367,10 @@ describe('docs/auth-contract.md §7: acceptance checklist', () => {
     expect((await me(created.session.accessToken)).body.error.code).toBe('session_revoked');
   });
 
-  it('sign-in answers the same for an unknown email and a wrong password', async () => {
+  it('sign-in answers the same for an unknown phone and a wrong password', async () => {
     const created = await newUser();
-    const unknown = await signin('nobody@example.com', PASSWORD);
-    const wrong = await signin(created.user.email, 'not the password');
+    const unknown = await signin('+2348099999999', PASSWORD);
+    const wrong = await signin(created.user.phone, 'not the password');
 
     expect(unknown.status).toBe(401);
     expect(wrong.status).toBe(401);
@@ -417,9 +406,8 @@ describe('docs/auth-contract.md §7: acceptance checklist', () => {
     const created = await signup(body, key);
     expect(created.status).toBe(201);
     await signup(body, key);
-    await signup(signupBody(2, { email: body.email }));
     await signup(signupBody(3, { phone: body.phone }));
-    await signup(signupBody(4, { email: 'bad', password: 'short' }));
+    await signup(signupBody(4, { phone: 'bad', password: 'short' }));
     const { session, user } = created.body;
     await me(session.accessToken);
     const rotated = (await refresh(session.refreshToken)).body.session;

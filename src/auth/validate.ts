@@ -10,7 +10,7 @@
  *   that is "missing or not a string" is `validation_failed` (`required` / `invalid_value`), and refresh
  *   follows the same rule.
  * - `required` means the key is absent. A present but empty string is judged by its own rule:
- *   `too_short` for fullName and password, `invalid_phone`, `invalid_email`, `invalid_value`.
+ *   `too_short` for fullName and password, `invalid_phone`, `invalid_value`.
  * - UNKNOWN FIELDS (contract §1: `400 validation_failed`) are listed as `{ field: <name>, code:
  *   'invalid_value' }`, nested ones as `device.<name>`. The contract has no `unknown_field` code, and
  *   `invalid_value` is the generic "this is not an accepted value" code. At most MAX_UNKNOWN_FIELDS are
@@ -30,8 +30,6 @@ export interface SignupInput {
   /** Trimmed. */
   fullName: string;
   phone: string;
-  /** Trimmed and lowercased. */
-  email: string;
   /** As sent: never trimmed. */
   password: string;
   device: { platform: 'ios' | 'android'; appVersion: string; installId: string };
@@ -41,9 +39,9 @@ export interface RefreshBody {
   refreshToken: string;
 }
 
-/** Sign-in body (contract §6). Email is trimmed and lowercased. Password is as sent. */
+/** Sign-in body (contract §6). Phone is trimmed. Password is as sent. */
 export interface SigninInput {
-  email: string;
+  phone: string;
   password: string;
   device: SignupInput['device'];
 }
@@ -57,7 +55,6 @@ export const SIGNIN_PASSWORD_MAX_CHARS = 1024;
 
 const PHONE_PATTERN = /^\+[1-9]\d{6,14}$/;
 const UUID = new RegExp(UUID_PATTERN);
-const MAX_EMAIL = 254;
 const MAX_UNKNOWN_FIELDS = 16;
 const MAX_UNKNOWN_NAME = 64;
 
@@ -130,16 +127,8 @@ function textLength(min: number, max: number): (s: string) => FieldErrorCode | u
   };
 }
 
-function validEmail(email: string): boolean {
-  if (/[\s\p{Cc}]/u.test(email)) return false;
-  const at = email.indexOf('@');
-  if (at < 1 || at !== email.lastIndexOf('@')) return false;
-  const domain = email.slice(at + 1);
-  if (!domain.includes('.')) return false;
-  return domain.split('.').every((label) => label.length > 0);
-}
-
-const SIGNUP_FIELDS = ['fullName', 'phone', 'email', 'password', 'device'] as const;
+/** `email` is not a field (live-sos-plan D5): sent anyway, it is an unknown field like any other. */
+const SIGNUP_FIELDS = ['fullName', 'phone', 'password', 'device'] as const;
 const DEVICE_FIELDS = ['platform', 'appVersion', 'installId'] as const;
 
 /**
@@ -152,7 +141,6 @@ export function validateSignup(body: unknown): SignupInput {
   // Pass 1: JSON types. Throws malformed_request, which wins over any field error.
   const fullName = readString(body, 'fullName')?.trim();
   const phone = readString(body, 'phone');
-  const email = readString(body, 'email')?.trim().toLowerCase();
   const password = readString(body, 'password');
   let device: Obj | undefined;
   if (has(body, 'device')) {
@@ -168,9 +156,6 @@ export function validateSignup(body: unknown): SignupInput {
   // Control characters (NUL above all) cannot be stored in Postgres text and are never a real name.
   check(c, 'fullName', fullName, (v) => (CONTROL.test(v) ? 'invalid_value' : textLength(1, 100)(v)));
   check(c, 'phone', phone, (v) => (PHONE_PATTERN.test(v) ? undefined : 'invalid_phone'));
-  check(c, 'email', email, (v) =>
-    characterLength(v) > MAX_EMAIL ? 'too_long' : validEmail(v) ? undefined : 'invalid_email',
-  );
   check(c, 'password', password, textLength(8, 128));
   if (device === undefined) c.add('device', 'required');
   else {
@@ -189,7 +174,6 @@ export function validateSignup(body: unknown): SignupInput {
   return {
     fullName: fullName as string,
     phone: phone as string,
-    email: email as string,
     password: password as string,
     device: {
       platform: platform as 'ios' | 'android',
@@ -219,17 +203,18 @@ export function validateSignoutBody(body: unknown): RefreshBody {
   return validateTokenBody(body);
 }
 
-const SIGNIN_FIELDS = ['email', 'password', 'device'] as const;
+const SIGNIN_FIELDS = ['phone', 'password', 'device'] as const;
 
 /**
  * Validates a sign-in body and returns it normalised, or throws an AuthError.
- * Device rules are the sign-up rules. Email and password have no format or length rules here:
- * any string is accepted, and a value that matches no account is the route's 401.
+ * Device rules are the sign-up rules. Phone and password have no format or length rules here:
+ * any string is accepted, and a value that matches no account is the route's 401. The phone is
+ * only trimmed: sign-up stores E.164 exactly as sent, so any other spelling matches no account.
  */
 export function validateSignin(body: unknown): SigninInput {
   if (!isObject(body)) throw authErrors.malformedRequest();
 
-  const email = readString(body, 'email')?.trim().toLowerCase();
+  const phone = readString(body, 'phone')?.trim();
   const password = readString(body, 'password');
   let device: Obj | undefined;
   if (has(body, 'device')) {
@@ -241,7 +226,7 @@ export function validateSignin(body: unknown): SigninInput {
   const installId = device && readString(device, 'installId');
 
   const c = new Collector();
-  if (email === undefined) c.add('email', 'required');
+  if (phone === undefined) c.add('phone', 'required');
   if (password === undefined) c.add('password', 'required');
   if (device === undefined) c.add('device', 'required');
   else {
@@ -258,7 +243,7 @@ export function validateSignin(body: unknown): SigninInput {
   if (c.fields.length > 0) c.fail();
 
   return {
-    email: email as string,
+    phone: phone as string,
     password: password as string,
     device: {
       platform: platform as 'ios' | 'android',

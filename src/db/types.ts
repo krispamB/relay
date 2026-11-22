@@ -126,8 +126,6 @@ export interface UsersTable {
   id: string;
   full_name: string;
   phone: string;
-  /** Trimmed and lowercased. */
-  email: string;
   password_hash: string;
   created_at: Timestamp;
   updated_at: Timestamp;
@@ -170,10 +168,10 @@ export interface SignupPhoneAttemptsTable {
   created_at: Timestamp;
 }
 
-/** Per-email sign-in attempts for the 10-per-hour limit. email_hash is a keyed HMAC, never the address. */
+/** Per-phone sign-in attempts for the 10-per-hour limit. phone_hash is a keyed HMAC, never the number. */
 export interface SigninAttemptsTable {
   id: Generated<string>;
-  email_hash: string;
+  phone_hash: string;
   created_at: Timestamp;
 }
 

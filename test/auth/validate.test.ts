@@ -8,7 +8,6 @@ function valid(): Record<string, unknown> {
   return {
     fullName: 'Ada Okafor',
     phone: '+2348031234567',
-    email: 'ada@example.com',
     password: 'correct horse battery staple',
     device: { platform: 'android', appVersion: '0.3.0', installId: INSTALL_ID },
   };
@@ -46,13 +45,11 @@ function fieldsOf(body: unknown): FieldError[] {
 const chars = (n: number, c = 'a') => c.repeat(n);
 
 describe('validateSignup: a valid body', () => {
-  it('is accepted and normalised: fullName trimmed, email trimmed and lowercased', () => {
+  it('is accepted and normalised: fullName trimmed', () => {
     const body = withChange('fullName', '  Ada Okafor \n');
-    body.email = '  ADA@Example.COM ';
     expect(validateSignup(body)).toEqual({
       fullName: 'Ada Okafor',
       phone: '+2348031234567',
-      email: 'ada@example.com',
       password: 'correct horse battery staple',
       device: { platform: 'android', appVersion: '0.3.0', installId: INSTALL_ID },
     });
@@ -76,7 +73,6 @@ describe('validateSignup: a valid body', () => {
     ['an 8-character password', 'password', chars(8)],
     ['a 128-character password', 'password', chars(128)],
     ['128 emoji as the password', 'password', '😀'.repeat(128)],
-    ['a 254-character email', 'email', `${chars(242)}@example.com`],
     ['a 32-character appVersion', 'device.appVersion', chars(32)],
     ['an empty appVersion (the contract sets only a maximum)', 'device.appVersion', ''],
   ])('accepts %s', (_name, path, value) => {
@@ -89,7 +85,6 @@ describe('validateSignup: one error code per field', () => {
     // required: the key is absent
     ['fullName', 'fullName', undefined, { field: 'fullName', code: 'required' }],
     ['phone', 'phone', undefined, { field: 'phone', code: 'required' }],
-    ['email', 'email', undefined, { field: 'email', code: 'required' }],
     ['password', 'password', undefined, { field: 'password', code: 'required' }],
     ['device', 'device', undefined, { field: 'device', code: 'required' }],
     ['device.platform', 'device.platform', undefined, { field: 'device.platform', code: 'required' }],
@@ -106,7 +101,6 @@ describe('validateSignup: one error code per field', () => {
     ['fullName of 101 emoji', 'fullName', '😀'.repeat(101), { field: 'fullName', code: 'too_long' }],
     ['password of 129', 'password', chars(129), { field: 'password', code: 'too_long' }],
     ['password of 129 emoji', 'password', '😀'.repeat(129), { field: 'password', code: 'too_long' }],
-    ['email of 255', 'email', `${chars(243)}@example.com`, { field: 'email', code: 'too_long' }],
     ['appVersion of 33', 'device.appVersion', chars(33), { field: 'device.appVersion', code: 'too_long' }],
     // invalid_phone
     ['phone empty', 'phone', '', { field: 'phone', code: 'invalid_phone' }],
@@ -119,40 +113,6 @@ describe('validateSignup: one error code per field', () => {
     ['phone with letters', 'phone', '+23480312345a7', { field: 'phone', code: 'invalid_phone' }],
     ['phone with a trailing newline', 'phone', '+2348031234567\n', { field: 'phone', code: 'invalid_phone' }],
     ['phone with Arabic-Indic digits', 'phone', '+٢٣٤٨٠٣١٢٣٤٥٦٧', { field: 'phone', code: 'invalid_phone' }],
-    // invalid_email
-    ['email empty', 'email', '', { field: 'email', code: 'invalid_email' }],
-    ['email blank', 'email', '   ', { field: 'email', code: 'invalid_email' }],
-    ['email without @', 'email', 'ada.example.com', { field: 'email', code: 'invalid_email' }],
-    ['email with two @', 'email', 'ada@@example.com', { field: 'email', code: 'invalid_email' }],
-    ['email with two @ apart', 'email', 'a@b@example.com', { field: 'email', code: 'invalid_email' }],
-    ['email without local part', 'email', '@example.com', { field: 'email', code: 'invalid_email' }],
-    ['email without domain', 'email', 'ada@', { field: 'email', code: 'invalid_email' }],
-    ['email domain without a dot', 'email', 'ada@example', { field: 'email', code: 'invalid_email' }],
-    [
-      'email domain starting with a dot',
-      'email',
-      'ada@.example.com',
-      { field: 'email', code: 'invalid_email' },
-    ],
-    [
-      'email domain ending with a dot',
-      'email',
-      'ada@example.com.',
-      { field: 'email', code: 'invalid_email' },
-    ],
-    [
-      'email domain with an empty label',
-      'email',
-      'ada@example..com',
-      { field: 'email', code: 'invalid_email' },
-    ],
-    [
-      'email with a space inside',
-      'email',
-      'ada okafor@example.com',
-      { field: 'email', code: 'invalid_email' },
-    ],
-    ['email with a tab inside', 'email', 'ada@exa\tmple.com', { field: 'email', code: 'invalid_email' }],
     // invalid_value
     ['platform unknown', 'device.platform', 'windows', { field: 'device.platform', code: 'invalid_value' }],
     ['platform wrong case', 'device.platform', 'iOS', { field: 'device.platform', code: 'invalid_value' }],
@@ -188,14 +148,12 @@ describe('validateSignup: several invalid fields', () => {
     const body = {
       fullName: ' ',
       phone: '0803',
-      email: 'nope',
       password: 'short',
       device: { platform: 'beos', appVersion: chars(40), installId: 'x' },
     };
     expect(fieldsOf(body)).toEqual([
       { field: 'fullName', code: 'too_short' },
       { field: 'phone', code: 'invalid_phone' },
-      { field: 'email', code: 'invalid_email' },
       { field: 'password', code: 'too_short' },
       { field: 'device.platform', code: 'invalid_value' },
       { field: 'device.appVersion', code: 'too_long' },
@@ -207,7 +165,6 @@ describe('validateSignup: several invalid fields', () => {
     expect(fieldsOf({})).toEqual([
       { field: 'fullName', code: 'required' },
       { field: 'phone', code: 'required' },
-      { field: 'email', code: 'required' },
       { field: 'password', code: 'required' },
       { field: 'device', code: 'required' },
     ]);
@@ -223,11 +180,11 @@ describe('validateSignup: several invalid fields', () => {
 
   it('mixes required, a bad value and a nested error', () => {
     const body = withChange('phone', undefined);
-    body.email = 'bad';
+    body.password = 'bad';
     (body.device as Record<string, unknown>).installId = 'bad';
     expect(fieldsOf(body)).toEqual([
       { field: 'phone', code: 'required' },
-      { field: 'email', code: 'invalid_email' },
+      { field: 'password', code: 'too_short' },
       { field: 'device.installId', code: 'invalid_value' },
     ]);
   });
@@ -255,6 +212,15 @@ describe('validateSignup: unknown fields (code: invalid_value)', () => {
     ]);
   });
 
+  it('refuses email, which is no longer a sign-up field, whatever its value', () => {
+    expect(fieldsOf({ ...valid(), email: 'ada@example.com' })).toEqual([
+      { field: 'email', code: 'invalid_value' },
+    ]);
+    expect(fieldsOf({ ...valid(), email: ['ada@example.com'] })).toEqual([
+      { field: 'email', code: 'invalid_value' },
+    ]);
+  });
+
   it('refuses a field the other endpoints use', () => {
     expect(fieldsOf({ ...valid(), refreshToken: 'rt_x' })).toEqual([
       { field: 'refreshToken', code: 'invalid_value' },
@@ -263,7 +229,7 @@ describe('validateSignup: unknown fields (code: invalid_value)', () => {
 
   it('reports an own "__proto__" key from the JSON parser', () => {
     const body = JSON.parse(
-      `{"__proto__":{"admin":true},"fullName":"Ada","phone":"+2348031234567","email":"a@b.co","password":"12345678","device":{"platform":"ios","appVersion":"1","installId":"${INSTALL_ID}"}}`,
+      `{"__proto__":{"admin":true},"fullName":"Ada","phone":"+2348031234567","password":"12345678","device":{"platform":"ios","appVersion":"1","installId":"${INSTALL_ID}"}}`,
     );
     expect(fieldsOf(body)).toEqual([{ field: '__proto__', code: 'invalid_value' }]);
   });
@@ -305,7 +271,6 @@ describe('validateSignup: malformed_request', () => {
     ['fullName: number', 'fullName', 5],
     ['fullName: null', 'fullName', null],
     ['phone: number', 'phone', 2348031234567],
-    ['email: array', 'email', ['ada@example.com']],
     ['password: object', 'password', { a: 1 }],
     ['password: boolean', 'password', true],
     ['device: string', 'device', 'android'],

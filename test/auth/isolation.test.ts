@@ -57,7 +57,6 @@ async function seedSession(ctx: ReturnType<typeof createTestContext>) {
       id: 'user-1',
       full_name: 'Ada Okafor',
       phone: '+2348031234567',
-      email: 'ada@example.com',
       password_hash: '$argon2id$stub',
       created_at: now,
       updated_at: now,

@@ -1,9 +1,9 @@
 import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { deriveAuthKeys, signinEmailHash } from '../../src/auth/keys.js';
+import { deriveAuthKeys, signinPhoneHash } from '../../src/auth/keys.js';
 
 const SECRET = 'auth-token-secret-for-tests-0123456789ab';
-const NAMES = ['access', 'refresh', 'signupBody', 'signinEmail'] as const;
+const NAMES = ['access', 'refresh', 'signupBody', 'signinPhone'] as const;
 
 describe('deriveAuthKeys', () => {
   it('derives four 32-byte keys', () => {
@@ -38,17 +38,17 @@ describe('deriveAuthKeys', () => {
     }
   });
 
-  it('hashes a sign-in email with the signinEmail key and a distinct prefix', () => {
+  it('hashes a sign-in phone number with the signinPhone key and a distinct prefix', () => {
     const keys = deriveAuthKeys(SECRET);
-    const email = 'ada@example.com';
-    const hash = signinEmailHash(keys.signinEmail, email);
-    const expected = createHmac('sha256', keys.signinEmail).update(`signin-email:${email}`).digest('hex');
+    const phone = '+2348031234567';
+    const hash = signinPhoneHash(keys.signinPhone, phone);
+    const expected = createHmac('sha256', keys.signinPhone).update(`signin-phone:${phone}`).digest('hex');
     const underAnotherKey = createHmac('sha256', keys.signupBody)
-      .update(`signin-email:${email}`)
+      .update(`signin-phone:${phone}`)
       .digest('hex');
     expect(hash).toBe(expected);
     expect(hash).not.toBe(underAnotherKey);
-    expect(hash).not.toContain('ada@');
+    expect(hash).not.toContain('2348031234567');
   });
 
   it('refuses an empty secret', () => {

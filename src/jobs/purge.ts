@@ -25,7 +25,7 @@ export const ALERT_LOG_RETENTION_MS = DAY;
 export const AUTH_TOKEN_RETENTION_MS = 7 * DAY;
 /** Auth contract §8. Sign-up idempotency rows and per-phone attempt rows. */
 export const AUTH_SIGNUP_RETENTION_MS = DAY;
-/** Sign-in attempts are only needed for the 1-hour per-email limit (contract §6). */
+/** Sign-in attempts are only needed for the 1-hour per-phone limit (contract §6). */
 export const AUTH_SIGNIN_ATTEMPT_RETENTION_MS = HOUR;
 /** Rows per DELETE statement; each statement is its own short transaction. */
 export const PURGE_BATCH = 500;

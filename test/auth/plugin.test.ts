@@ -41,7 +41,6 @@ vi.mock('../../src/auth/routes/refresh.js', async () => {
       app.get('/v1/auth/_throw/:name', async (req) => {
         const { name } = req.params as { name: string };
         const make: Record<string, () => Error> = {
-          email_taken: () => authErrors.emailTaken(),
           phone_taken: () => authErrors.phoneTaken(),
           idempotency_key_reused: () => authErrors.idempotencyKeyReused(),
           invalid_refresh_token: () => authErrors.invalidRefreshToken(),
@@ -100,7 +99,6 @@ async function setup(opts: { auth?: boolean; perIp?: number } = {}) {
 const validBody = () => ({
   fullName: 'Ada Okafor',
   phone: '+2348031234567',
-  email: 'ADA@example.com',
   password: 'correct horse battery staple',
   device: { platform: 'ios', appVersion: '0.3.0', installId: '5b0c1f7e-2a3d-4e8f-9c6b-1a2d3e4f5a6b' },
 });
@@ -156,7 +154,7 @@ describe('auth enabled', () => {
     const res = await post(app, '/v1/auth/signup', validBody());
     expect(res.statusCode).toBe(201);
     expect(res.headers['content-type']).toBe('application/json; charset=utf-8');
-    expect(res.json().email).toBe('ada@example.com');
+    expect(res.json().phone).toBe('+2348031234567');
   });
 
   it('answers an unknown /v1/auth path with the relay 404 (not an auth code)', async () => {
@@ -305,7 +303,6 @@ describe('auth enabled: body size', () => {
 
 describe('auth enabled: the plugin error handler', () => {
   it.each([
-    ['email_taken', 409],
     ['phone_taken', 409],
     ['idempotency_key_reused', 422],
     ['invalid_refresh_token', 401],

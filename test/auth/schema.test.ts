@@ -6,14 +6,13 @@ import { closeTestDb, resetDb, testDb } from '../helpers/context.js';
 const now = new Date('2026-11-18T12:00:00Z');
 const later = new Date('2027-02-16T12:00:00Z');
 
-async function insertUser(id: string, email = `${id}@example.com`, phone = `+23480${id.padStart(8, '0')}`) {
+async function insertUser(id: string, phone = `+23480${id.padStart(8, '0')}`) {
   await testDb()
     .insertInto('users')
     .values({
       id,
       full_name: 'Ada Okafor',
       phone,
-      email,
       password_hash: '$argon2id$stub',
       created_at: now,
       updated_at: now,
@@ -74,12 +73,26 @@ describe('auth schema (migration 004)', () => {
     ]);
   });
 
-  it('refuses a second user with the same email or phone', async () => {
-    await insertUser('1', 'ada@example.com', '+2348031234567');
-    const sameEmail = await failure(insertUser('2', 'ada@example.com', '+2348031234568'));
-    expect(isUniqueViolation(sameEmail)).toBe(true);
-    const samePhone = await failure(insertUser('3', 'other@example.com', '+2348031234567'));
+  it('refuses a second user with the same phone', async () => {
+    await insertUser('1', '+2348031234567');
+    const samePhone = await failure(insertUser('3', '+2348031234567'));
     expect(isUniqueViolation(samePhone)).toBe(true);
+  });
+
+  it('keeps no email for a user (migration 006)', async () => {
+    const r = await sql<{ column_name: string }>`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'users'`.execute(testDb());
+    expect(r.rows.map((x) => x.column_name)).not.toContain('email');
+  });
+
+  it('counts sign-in attempts by phone hash, not email hash (migration 006)', async () => {
+    const r = await sql<{ column_name: string }>`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'signin_attempts'`.execute(testDb());
+    const columns = r.rows.map((x) => x.column_name);
+    expect(columns).toContain('phone_hash');
+    expect(columns).not.toContain('email_hash');
   });
 
   it('refuses a platform other than ios or android', async () => {

@@ -54,7 +54,6 @@ async function setup(opts: { log?: Logger } = {}) {
 const bodyFor = (n: number, over: Record<string, unknown> = {}) => ({
   fullName: 'Ada Okafor',
   phone: `+234803123${String(n).padStart(4, '0')}`,
-  email: `user${n}@example.com`,
   password: 'correct horse battery staple',
   device: { platform: 'android', appVersion: '0.3.0', installId: '5b0c1f7e-2a3d-4e8f-9c6b-1a2d3e4f5a6b' },
   ...over,
@@ -90,7 +89,7 @@ const countRows = async (
 describe('201 Created', () => {
   it('answers the contract shape and signs the user in', async () => {
     const { app, ctx } = await setup();
-    const res = await signup(app, bodyFor(1, { fullName: '  Ada Okafor  ', email: ' ADA@Example.com ' }));
+    const res = await signup(app, bodyFor(1, { fullName: '  Ada Okafor  ' }));
     expect(res.statusCode).toBe(201);
     expect(res.headers['content-type']).toBe('application/json; charset=utf-8');
     const body = res.json();
@@ -99,7 +98,6 @@ describe('201 Created', () => {
       id: expect.stringMatching(UUID_RE),
       fullName: 'Ada Okafor',
       phone: '+2348031230001',
-      email: 'ada@example.com',
       phoneVerified: false,
       createdAt: rfc3339(ctx.clock.now()),
     });
@@ -151,7 +149,8 @@ describe('201 Created', () => {
     expect(row.password_hash.startsWith('$argon2id$')).toBe(true);
     expect(JSON.stringify(row)).not.toContain(password);
     expect(await verifyPassword(row.password_hash, password)).toBe(true);
-    expect(row).toMatchObject({ full_name: 'Ada Okafor', email: 'user1@example.com' });
+    expect(row).toMatchObject({ full_name: 'Ada Okafor', phone: '+2348031230001' });
+    expect(row).not.toHaveProperty('email');
   });
 
   it('documents the route in OpenAPI under the auth tag', async () => {
@@ -224,7 +223,6 @@ describe('validation', () => {
     const res = await signup(app, {
       fullName: '   ',
       phone: '0803',
-      email: 'nope',
       password: 'short',
       device: { platform: 'beos', appVersion: 'v'.repeat(33), installId: 'x' },
     });
@@ -235,7 +233,6 @@ describe('validation', () => {
       fields: [
         { field: 'fullName', code: 'too_short' },
         { field: 'phone', code: 'invalid_phone' },
-        { field: 'email', code: 'invalid_email' },
         { field: 'password', code: 'too_short' },
         { field: 'device.platform', code: 'invalid_value' },
         { field: 'device.appVersion', code: 'too_long' },
@@ -252,6 +249,19 @@ describe('validation', () => {
     expect(res.json().error.code).toBe('validation_failed');
     expect(res.json().error.fields).toEqual([{ field: 'role', code: 'invalid_value' }]);
     expect(await countRows('users')).toBe(0);
+  });
+
+  it('email is no longer a sign-up field: it is an unknown field → 400 validation_failed', async () => {
+    const { app } = await setup();
+    const res = await signup(app, { ...bodyFor(1), email: 'ada@example.com' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toEqual({
+      code: 'validation_failed',
+      message: expect.any(String),
+      fields: [{ field: 'email', code: 'invalid_value' }],
+    });
+    expect(await countRows('users')).toBe(0);
+    expect(await countRows('signup_phone_attempts')).toBe(0);
   });
 
   it('a body that is not JSON → 400 malformed_request', async () => {
@@ -271,34 +281,13 @@ describe('validation', () => {
 });
 
 describe('uniqueness', () => {
-  it('a duplicate email → 409 email_taken, whatever its case or spacing', async () => {
-    const { app } = await setup();
-    expect((await signup(app, bodyFor(1, { email: 'ada@example.com' }))).statusCode).toBe(201);
-    const res = await signup(app, bodyFor(2, { email: ' ADA@Example.com ' }));
-    expect(res.statusCode).toBe(409);
-    expect(res.json()).toEqual({ error: { code: 'email_taken', message: expect.any(String) } });
-    expect(await countRows('users')).toBe(1);
-  });
-
   it('a duplicate phone → 409 phone_taken', async () => {
     const { app } = await setup();
     expect((await signup(app, bodyFor(1))).statusCode).toBe(201);
-    const res = await signup(app, bodyFor(1, { email: 'other@example.com' }));
+    const res = await signup(app, bodyFor(1, { fullName: 'Someone Else' }));
     expect(res.statusCode).toBe(409);
-    expect(res.json().error.code).toBe('phone_taken');
+    expect(res.json()).toEqual({ error: { code: 'phone_taken', message: expect.any(String) } });
     expect(await countRows('users')).toBe(1);
-  });
-
-  it('both taken (by the same or by different accounts) → email_taken', async () => {
-    const { app } = await setup();
-    expect((await signup(app, bodyFor(1))).statusCode).toBe(201);
-    expect((await signup(app, bodyFor(2))).statusCode).toBe(201);
-    const same = await signup(app, bodyFor(1, { fullName: 'Someone Else' }));
-    expect(same.statusCode).toBe(409);
-    expect(same.json().error.code).toBe('email_taken');
-    const crossed = await signup(app, bodyFor(1, { email: bodyFor(2).email }));
-    expect(crossed.statusCode).toBe(409);
-    expect(crossed.json().error.code).toBe('email_taken');
   });
 
   it('a refused sign-up leaves no session, family or idempotency row behind', async () => {
@@ -332,8 +321,8 @@ describe('idempotency', () => {
   it('a body that normalises to the same input is the same body', async () => {
     const { app } = await setup();
     const key = randomUUID();
-    const first = await signup(app, bodyFor(1, { email: 'ada@example.com' }), { key });
-    const second = await signup(app, bodyFor(1, { email: '  ADA@example.com ', fullName: ' Ada Okafor' }), {
+    const first = await signup(app, bodyFor(1, { fullName: 'Ada Okafor' }), { key });
+    const second = await signup(app, bodyFor(1, { fullName: ' Ada Okafor  ' }), {
       key,
     });
     expect(second.statusCode).toBe(201);
@@ -395,14 +384,14 @@ describe('idempotency', () => {
     expect(rows[0]?.created_at.getTime()).toBe(ctx.clock.now().getTime());
   });
 
-  it('after 24 h the same key and body is a new attempt, so a taken email is a 409', async () => {
+  it('after 24 h the same key and body is a new attempt, so a taken phone is a 409', async () => {
     const { app, ctx } = await setup();
     const key = randomUUID();
     await signup(app, bodyFor(1), { key });
     ctx.clock.advance(DAY + 1000);
     const res = await signup(app, bodyFor(1), { key });
     expect(res.statusCode).toBe(409);
-    expect(res.json().error.code).toBe('email_taken');
+    expect(res.json().error.code).toBe('phone_taken');
   });
 
   it('a key that was refused (409) is not stored, so it can be reused for a corrected body', async () => {
@@ -433,8 +422,9 @@ describe('rate limits', () => {
   it('counts every non-replay attempt that passed validation, 409s included', async () => {
     const { app } = await setup();
     expect((await signup(app, bodyFor(1))).statusCode).toBe(201);
-    for (let n = 2; n <= 5; n++)
-      expect((await signup(app, bodyFor(n, { email: 'user1@example.com' }))).statusCode).toBe(409);
+    expect((await signup(app, bodyFor(2))).statusCode).toBe(201);
+    // Three 409s, spread over two phones so that no phone reaches its own limit.
+    for (const n of [1, 2, 1]) expect((await signup(app, bodyFor(n))).statusCode).toBe(409);
     expect((await signup(app, bodyFor(6))).statusCode).toBe(429);
   });
 
@@ -597,26 +587,7 @@ describe('concurrency', () => {
     expect(await countRows('users')).toBe(1);
   });
 
-  it('concurrent sign-ups for one email under different keys: one 201, the rest email_taken', async () => {
-    const { app } = await setup();
-    const results = await Promise.all([1, 2, 3].map(() => signup(app, bodyFor(1))));
-    expect(results.map((r) => r.statusCode).sort()).toEqual([201, 409, 409]);
-    for (const r of results.filter((x) => x.statusCode === 409))
-      expect(r.json().error.code).toBe('email_taken');
-    expect(await countRows('users')).toBe(1);
-  });
-
-  it('concurrent sign-ups for one email with different phones: one 201, the rest email_taken', async () => {
-    const { app } = await setup();
-    const email = bodyFor(1).email;
-    const results = await Promise.all([1, 2, 3].map((n) => signup(app, bodyFor(n, { email }))));
-    expect(results.map((r) => r.statusCode).sort()).toEqual([201, 409, 409]);
-    for (const r of results.filter((x) => x.statusCode === 409))
-      expect(r.json().error.code).toBe('email_taken');
-    expect(await countRows('users')).toBe(1);
-  });
-
-  it('concurrent sign-ups for one phone with different emails: one 201, the rest phone_taken', async () => {
+  it('concurrent sign-ups for one phone under different keys: one 201, the rest phone_taken', async () => {
     const { app } = await setup();
     const phone = bodyFor(1).phone;
     const results = await Promise.all([1, 2, 3].map((n) => signup(app, bodyFor(n, { phone }))));
@@ -645,15 +616,14 @@ describe('logs', () => {
     const res = await signup(app, body, { key });
     const again = await signup(app, body, { key });
     await signup(app, bodyFor(1, { fullName: 'Other Name' }), { key }); // 422
-    await signup(app, bodyFor(1, { email: 'second@example.com' })); // 409
+    await signup(app, bodyFor(1, { fullName: 'Second Name' })); // 409
     const out = lines.join('\n');
     expect(out).toContain(res.json().user.id);
     expect(again.statusCode).toBe(201);
     for (const secret of [
       'Distinctive Name',
       'a very distinctive password',
-      body.email,
-      'second@example.com',
+      'Second Name',
       body.phone,
       key,
       res.json().session.accessToken,
