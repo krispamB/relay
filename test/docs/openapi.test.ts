@@ -22,6 +22,7 @@ const SOS_OPERATIONS: [method: string, path: string][] = [
   ['get', '/v1/intake/{intakeCode}'],
   ['post', '/v1/sos'],
   ['get', '/v1/sos/{receiptId}/status'],
+  ['post', '/v1/sos/{receiptId}/recording'],
 ];
 
 async function committed(): Promise<Doc> {
@@ -60,6 +61,15 @@ describe('docs/openapi.json', () => {
     expect(doc.paths['/v1/auth/signout']?.post?.security).toEqual([{ accessToken: [] }]);
     expect(doc.paths['/v1/sos']?.post?.security).toEqual([{ accessToken: [] }]);
     expect(doc.paths['/v1/sos/{receiptId}/status']?.get?.security).toEqual([{ accessToken: [] }]);
+    expect(doc.paths['/v1/sos/{receiptId}/recording']?.post?.security).toEqual([{ accessToken: [] }]);
+  });
+
+  it('describes the recording upload as a raw audio/mp4 body', async () => {
+    const doc = await committed();
+    const op = doc.paths['/v1/sos/{receiptId}/recording']?.post as
+      | { requestBody?: { content?: Record<string, unknown> } }
+      | undefined;
+    expect(Object.keys(op?.requestBody?.content ?? {})).toEqual(['audio/mp4']);
   });
 
   it('leaves the SOS operations out of the auth tag', async () => {

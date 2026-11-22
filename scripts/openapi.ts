@@ -47,6 +47,7 @@ function standInConfig(): Config {
     // The secret is never used: no token is signed here.
     auth: { tokenSecret: 'unused-while-rendering-the-openapi-document' },
     sosNatureText: DEFAULT_SOS_NATURE_TEXT,
+    recordingsPerSos: 1,
     alertWebhookUrl: undefined,
     demoDispatchAfterS: 30,
     demoCloseAfterS: 90,

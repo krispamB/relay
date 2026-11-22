@@ -123,6 +123,7 @@ TEST_DATABASE_URL=postgres://user:pass@localhost:5432/relay_test npm test
 | `PHONE_HASH_SECRET`, `ADMIN_TOKEN` | At least 32 bytes each (`openssl rand -hex 32`). Changing the first orphans existing phone strikes and blocks. |
 | `AUTH_TOKEN_SECRET` | Required, at least 32 bytes (`openssl rand -hex 32`). Auth is always on: the SOS routes take the signed-in user's access token (`AUTH_ENABLED` is gone). It signs access tokens and derives refresh tokens: changing it signs every user out. |
 | `SOS_NATURE_TEXT` | The Nature of every SOS call in Core (default `SOS – caller recording to follow`), at most 200 characters. The caller sends no nature: the recording carries what happened. |
+| `RECORDINGS_PER_SOS` | Voice recordings one SOS may hold (default `1`, at least 1). A further upload is refused with 409 `recording_limit`. |
 | `CLIENT_IP_HEADER` | Header holding the caller's address. Unset locally. On Railway: `x-real-ip`. Wrong value means every caller shares one IP and the per-IP limits misfire. |
 | `ALERT_WEBHOOK_URL` | Where alerts go. Unset means alerts are only logged. |
 | `RUN_JOBS` | `false` runs the HTTP servers only (jobs elsewhere). |
@@ -230,6 +231,8 @@ One outbound webhook (`ALERT_WEBHOOK_URL`); body `{severity, code, text, referen
 ### Metrics
 
 `GET /metrics` on the admin port (Prometheus text format), behind the admin token. Counters: submissions by outcome, Core calls by endpoint and result, attestation results, rate-limit refusals by rule, and with auth on `auth_signups_total` (created, replay), `auth_signins_total` (success, invalid_credentials, rate_limited), `auth_refreshes_total` (rotated, grace, reuse_detected, revoked, invalid, rate_limited) and `auth_signouts_total` (revoked, noop). Histograms: Core latency and `POST /v1/sos` latency. Gauges: `sos_queue_depth`, `sos_oldest_queued_age_seconds`, `sos_delivery_paused`. Metrics and logs carry no phone number, name, coordinate or free text.
+
+Recordings: `recordings_uploaded_total` (accepted, replay, recording_limit, sos_closed, key_reused), `recordings_attached_total` and `recordings_dropped_total` by reason (call_closed, sos_closed, sos_failed, attempts_exhausted, core_rejected, window_ended, no_bytes). The attach worker (`recordings` job) sends each stored recording to Core with `SaveCallFile` once the call exists; a Core 401/403 pauses delivery like SaveCall does. The audio is never logged.
 
 ## Before go-live
 

@@ -44,6 +44,8 @@ export interface Config {
   };
   /** The Nature of every SOS call sent to Core (docs/live-sos-plan.md §3.2, D6). */
   sosNatureText: string;
+  /** Voice recordings one SOS may hold (docs/live-sos-plan.md D8). Ships as 1. */
+  recordingsPerSos: number;
   adminToken: string;
   alertWebhookUrl: string | undefined;
   demoDispatchAfterS: number;
@@ -188,6 +190,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     adminToken: secret('ADMIN_TOKEN'),
     auth: { tokenSecret: secret('AUTH_TOKEN_SECRET') },
     sosNatureText,
+    recordingsPerSos: int('RECORDINGS_PER_SOS', 1, 1),
     alertWebhookUrl,
     demoDispatchAfterS: int('DEMO_DISPATCH_AFTER_S', 30, 1),
     demoCloseAfterS: int('DEMO_CLOSE_AFTER_S', 90, 1),

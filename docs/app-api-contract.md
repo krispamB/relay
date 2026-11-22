@@ -323,13 +323,14 @@ the MP4 `ftyp` box, and the declared duration; it does not decode or transcode a
 | HTTP | Body | Meaning | App does |
 |---|---|---|---|
 | **202** | `{ "recordingId", "seq", "status": "pending" }` | Accepted for attach | Show upload pending in live state (`recording.status`). |
-| **200** | Same as 202 | Replay: same key and same bytes | Treat as success. |
-| **400** | error | Empty body or bad headers | Fix client. |
+| **200** | Same as 202, but `status` is the recording's current status | Replay: same key and same bytes | Treat as success. |
+| **400** | `invalid_request` | Empty body, a body that is not an MP4 container, or a missing or bad `Idempotency-Key` / `X-Recording-Duration-Ms` | Fix client. |
 | **401** | `unauthorized` | | Refresh, retry once with same key and bytes. |
 | **404** | `not_found` | Not owner or unknown receipt | Stop. |
 | **409** | `recording_limit` | Already has max recordings (default 1) | Do not send another. |
 | **409** | `sos_closed` | SOS `closed` or `failed` | Discard local audio; cannot attach. |
-| **413** | `payload_too_large` | Over 400 KB | Re-encode or shorten before retry (new key if bytes change). |
+| **413** | `payload_too_large` | Over 400 000 bytes | Re-encode or shorten before retry (new key if bytes change). |
+| **415** | `invalid_request` | `Content-Type` is not `audio/mp4` | Fix client. |
 | **422** | `idempotency_key_reused` | Same key, different bytes | Client bug: new key for new bytes. |
 
 | Field | Meaning |
@@ -337,6 +338,14 @@ the MP4 `ftyp` box, and the declared duration; it does not decode or transcode a
 | `recordingId` | `rec_` + ULID |
 | `seq` | 1-based sequence (pilot ships with max 1) |
 | `status` | `pending` until attached or dropped (visible on live snapshot as `recording.status`) |
+
+**What the relay does with it.** The `recordings` job attaches the audio to the Core call with
+`SaveCallFile` as `{reference}-{seq}.m4a` once the call exists (a recording uploaded while the SOS is still
+`queued` waits, and is checked again every 5 s). It retries 5xx, 429 and timeouts with the delivery backoff,
+at most 5 attempts. `recording.status` becomes `attached` when Core has the file, or `dropped` (audio
+discarded) when the call is closed first, the SOS ends `closed` or `failed`, Core refuses the file, the
+attempts run out, or the SOS leaves the 24 h window with the recording still pending. A drop is final: a
+dropped recording still counts toward `RECORDINGS_PER_SOS`.
 
 **Format (app production target):** AAC in `.m4a`, mono, 16 kHz, 32 kbps, max 60 s (~240 KB/min).
 

@@ -57,6 +57,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     adminToken: 'admin-token-for-tests-0123456789abcdef',
     auth: { tokenSecret: 'auth-token-secret-for-tests-0123456789ab' },
     sosNatureText: DEFAULT_SOS_NATURE_TEXT,
+    recordingsPerSos: 1,
     alertWebhookUrl: undefined,
     demoDispatchAfterS: 30,
     demoCloseAfterS: 90,

@@ -30,6 +30,8 @@ export const ALERT_CODES = {
   queueBacklog: 'queue_backlog',
   automaticBlock: 'automatic_block',
   phoneHoaxThreshold: 'phone_hoax_threshold',
+  recordingRejected: 'recording_rejected',
+  recordingDropped: 'recording_dropped',
 } as const;
 
 export class NoopAlerter implements Alerter {
