@@ -5,15 +5,15 @@ backend are built against it at the same time. Until the backend is ready, the a
 that implements this contract, so the backend must match it exactly. If a change is needed, change this
 document first, and change the app and the backend together.
 
-For the demo, **sign-up** and **sign-in** must work end to end. The app also uses refresh, sign-out and
+For the pilot, **sign-up** and **sign-in** must work end to end. The app also uses refresh, sign-out and
 `GET /v1/me` to keep the session alive. Sign-in ([section 6](#6-sign-in)) is how a user gets back into
 their account after a session ends: there is no other way back, since signing up again with the same
-email or phone is refused.
+phone is refused.
 
-The demo app **sends no SOS**. It does not call the relay's SOS endpoints (`/v1/intake`, `/v1/devices/*`,
-`/v1/sos`), which stay deployed and unchanged, as described in [`app-api-contract.md`](app-api-contract.md).
-An account and a registered device are separate, with nothing linking them. The link is decided later,
-together with sending an SOS from a signed-in app ([section 8](#8-not-in-the-demo)).
+**SOS uses the same access token.** `POST /v1/sos`, status, recording and the live WebSocket all take
+`Authorization: Bearer <accessToken>`. There is no device token. See
+[`app-api-contract.md`](app-api-contract.md) and [`live-sos-plan.md`](live-sos-plan.md). Auth is always
+on (`AUTH_ENABLED` is removed).
 
 ## Contents
 
@@ -167,7 +167,6 @@ Creates an account and returns a session, so the user is signed in at once.
 {
   "fullName": "Ada Okafor",
   "phone": "+2348031234567",
-  "email": "ada@example.com",
   "password": "correct horse battery staple",
   "device": { "platform": "android", "appVersion": "0.3.0", "installId": "5b0c1f7e-2a3d-4e8f-9c6b-1a2d3e4f5a6b" }
 }
@@ -176,10 +175,12 @@ Creates an account and returns a session, so the user is signed in at once.
 | Field | Type | Rule |
 |---|---|---|
 | `fullName` | string | 1–100 characters after trimming. The server trims it. No control characters (`invalid_value`). |
-| `phone` | string | E.164 (`^\+[1-9]\d{6,14}$`). The app has already normalised it with libphonenumber-js. |
-| `email` | string | A valid address of at most 254 characters. The server trims it and lowercases it before checking uniqueness and storing it. |
+| `phone` | string | E.164 (`^\+[1-9]\d{6,14}$`). The app has already normalised it with libphonenumber-js. Unique; stored for callback on SOS. |
 | `password` | string | 8–128 characters. No composition rules. Hash with Argon2id or bcrypt (cost 12 or more). Never log it. |
 | `device` | object | Required. `platform` is `"ios"` or `"android"`. `appVersion` is a string of at most 32 characters, with no control characters (`invalid_value`); it may be empty. `installId` is a UUID that the app generates once per install. It is stored with the session family, for support and for revoking a device's sessions. |
+
+`email` is not accepted. Sending it is `400 validation_failed` with an unknown-field entry (same as any
+other unknown field).
 
 **Responses**
 
@@ -191,7 +192,6 @@ Creates an account and returns a session, so the user is signed in at once.
     "id": "0b6f3a4e-8d2c-4f1a-9e7b-5c3d2a1f0e9d",
     "fullName": "Ada Okafor",
     "phone": "+2348031234567",
-    "email": "ada@example.com",
     "phoneVerified": false,
     "createdAt": "2026-11-18T12:00:00Z"
   },
@@ -202,17 +202,13 @@ Creates an account and returns a session, so the user is signed in at once.
 | Status | `code` | When | App behaviour |
 |---|---|---|---|
 | 400 | `validation_failed` | Any field breaks a rule in the table above. Return **every** invalid field, not only the first one. | Shows a message next to each field. |
-| 409 | `email_taken` | The email (lowercased) already has an account. | Shows "An account with this email already exists" on the email field. |
 | 409 | `phone_taken` | The phone number already has an account. | Shows "This phone number is already registered" on the phone field. |
 | 422 | `idempotency_key_reused` | See the header table above. | Treated as a bug: the app generates a new key and asks the user to submit again. |
 | 429 / 5xx | see [§2](#2-the-error-body) | | |
 
-If both the email and the phone number are taken, answer `email_taken`.
-
-**Known trade-off: account enumeration.** These two answers tell anyone whether an email or phone number
-has an account. That is accepted for the demo, and the per-IP and per-phone limits in [§5](#5-rate-limits)
-slow down bulk checking. Before a public release, decide whether to keep it or to move to a verify-first
-flow that answers the same way in both cases.
+**Known trade-off: account enumeration.** `phone_taken` tells anyone whether a phone number has an account.
+That is accepted for the pilot, and the per-IP and per-phone limits in [§5](#5-rate-limits) slow down bulk
+checking. Before a public release, decide whether to keep it or to move to a verify-first flow.
 
 <a id="field-error-codes"></a>**Field error codes** used in `fields[].code`:
 
@@ -220,10 +216,9 @@ flow that answers the same way in both cases.
 |---|---|
 | `required` | any. Means the field is absent. A field that is present but empty gets the field's own code (`too_short`, `invalid_phone`, …). |
 | `too_short` | `fullName`, `password` (an empty string included) |
-| `too_long` | `fullName`, `email`, `password`, `device.appVersion` |
+| `too_long` | `fullName`, `password`, `device.appVersion` |
 | `invalid_phone` | `phone` |
-| `invalid_email` | `email` |
-| `invalid_value` | `device.platform`, `device.installId`; `fullName` and `device.appVersion` with a control character; any **unknown field** (for example `device.os`), listed after the known fields in the order sent, at most 16 of them; the `Idempotency-Key` header (see above); `refreshToken` that is not a string |
+| `invalid_value` | `device.platform`, `device.installId`; `fullName` and `device.appVersion` with a control character; any **unknown field** (for example `email` or `device.os`), listed after the known fields in the order sent, at most 16 of them; the `Idempotency-Key` header (see above); `refreshToken` that is not a string |
 
 A wrong JSON type for a sign-up field (a number where a string is expected, `null`, `device` that is not
 an object) or a body that is not a JSON object is `400 malformed_request`, not `validation_failed`. The
@@ -291,14 +286,14 @@ user's name.
 | `POST /v1/auth/signup` | 5 per hour | client IP |
 | `POST /v1/auth/signup` | 3 per day | `phone` |
 | `POST /v1/auth/signin` | 20 per hour | client IP |
-| `POST /v1/auth/signin` | 10 per hour | `email` ([§6](#6-sign-in)) |
+| `POST /v1/auth/signin` | 10 per hour | `phone` ([§6](#6-sign-in)), counted by keyed phone hash |
 | `POST /v1/auth/refresh` | 30 per hour | refresh token family. Every request with a token of a known family counts, whatever the answer. An unknown token belongs to no family and is held back by the relay's per-IP limit instead. |
 | `POST /v1/auth/signout` | 120 per minute | the access token's family, not the user, so a stale or revoked access token can never use up the budget of the user's live session |
 | `GET /v1/me` (and later authenticated endpoints) | 120 per minute | user. Only requests whose token is accepted count. |
 | every endpoint | the relay's per-IP limit (default 120 per minute) | client IP |
 
 Sign-up limits count every request with a valid body that is not a replay, a `409` included (this is
-what slows down checking which emails and phones have accounts). A `400`, a `422` and a request refused by
+what slows down checking which phones have accounts). A `400`, a `422` and a request refused by
 a limit do not count, and neither do idempotent replays ([4.1](#41-post-v1authsignup)), including a request
 that only turns out to be a replay while it is being handled. The per-IP limit is checked before the
 per-phone one. Every `429` includes `retryAfterSeconds`; for the per-phone limit it is the time until an
@@ -319,7 +314,7 @@ the database and holds across instances and restarts.
 
 ```json
 {
-  "email": "ada@example.com",
+  "phone": "+2348031234567",
   "password": "correct horse battery staple",
   "device": { "platform": "android", "appVersion": "0.3.0", "installId": "5b0c1f7e-2a3d-4e8f-9c6b-1a2d3e4f5a6b" }
 }
@@ -329,33 +324,34 @@ No `Idempotency-Key`: a retried sign-in simply creates another session, and the 
 
 | Field | Rule |
 |---|---|
-| `email` | Required string. Trimmed and lowercased before lookup. Its format is **not** checked: an address that cannot have an account just fails to sign in. |
+| `phone` | Required string in E.164. The app normalises with libphonenumber-js before send. Lookup uses the same normalised form. |
 | `password` | Required string. Its length is **not** checked against the sign-up rules, for the same reason. A password longer than 1 024 characters fails at once without being hashed. |
 | `device` | Required, exactly as in sign-up. |
+
+`email` is not accepted (unknown field).
 
 Unknown fields, missing fields and wrong JSON types are answered as in sign-up (`validation_failed` or
 `malformed_request`, [§4.1](#field-error-codes)).
 
 | Status | Body / `code` | When | App behaviour |
 |---|---|---|---|
-| 200 | `{ "user": {…}, "session": {…} }` | The email and password match. `user` has the same shape as in sign-up. The session is a **new** token family: other sessions of the same user are not affected. | Stores the session and shows the home screen. |
+| 200 | `{ "user": {…}, "session": {…} }` | The phone and password match. `user` has the same shape as in sign-up. The session is a **new** token family: other sessions of the same user are not affected. | Stores the session and shows the home screen. |
 | 400 | `validation_failed` / `malformed_request` | See above. | As in sign-up. |
-| 401 | `invalid_credentials` | The email has no account, or the password is wrong. The body is **identical** in both cases, and both take the same time (the server checks a password hash either way). | Shows "Email or password is incorrect". |
+| 401 | `invalid_credentials` | The phone has no account, or the password is wrong. The body is **identical** in both cases, and both take the same time (the server checks a password hash either way). | Shows "Phone or password is incorrect". |
 | 429 | `rate_limited` | See below. | Shows "Too many attempts, try again in N minutes". |
 
-Rate limits: **20 per hour per client IP** and **10 per hour per email address**. Every attempt with a
-valid body counts, successful or not. The per-IP limit is checked first. The per-email limit is kept in
-the database (by a keyed hash of the address, never the address itself), so it holds across relay
-instances and restarts, and it applies even when the email has no account. An attempt refused by a limit
+Rate limits: **20 per hour per client IP** and **10 per hour per phone number**. Every attempt with a
+valid body counts, successful or not. The per-IP limit is checked first. The per-phone limit is kept in
+the database (by a keyed hash of the E.164 number, never the number itself), so it holds across relay
+instances and restarts, and it applies even when the phone has no account. An attempt refused by a limit
 is not counted, so waiting is enough: the next attempt works once the oldest counted one is an hour old.
-The `message` of `invalid_credentials` is always "The email or password is not correct."
+The `message` of `invalid_credentials` is always "The phone or password is not correct."
 
-**Known trade-offs (accepted for the demo):**
+**Known trade-offs (accepted for the pilot):**
 
-- **Lock-out by guessing.** Anyone who knows a user's email can make 10 attempts an hour and keep the real
-  user from signing in for that hour, from any number of IPs. Successful attempts count too. This is the
-  price of a per-email limit that cannot be bypassed by switching IPs; revisit it before a public release
-  (for example with a per-email-and-IP limit, or a CAPTCHA after failures).
+- **Lock-out by guessing.** Anyone who knows a user's phone number can make 10 attempts an hour and keep
+  the real user from signing in for that hour, from any number of IPs. Successful attempts count too. Revisit
+  before a public release (for example with a per-phone-and-IP limit, or a CAPTCHA after failures).
 - **IPv6 and the per-IP limits.** The per-IP limits key on the full client address, so a caller with an
   IPv6 range has many addresses. Each accepted sign-in costs one password check (about 19 MiB and 12 ms).
   Grouping IPv6 addresses by /64 is the fix if the edge passes IPv6 client addresses through. Sign-up has
@@ -367,34 +363,32 @@ The `message` of `invalid_credentials` is always "The email or password is not c
 
 - [ ] Sign-up with a valid body returns 201 with `user` and `session`, and the access token works on `GET /v1/me`.
 - [ ] Sign-up with several invalid fields returns 400 and lists **all** of them in `fields`.
-- [ ] A duplicate email returns 409 `email_taken`, including when it differs only in case (`ADA@example.com`).
 - [ ] A duplicate phone number returns 409 `phone_taken`.
+- [ ] Sign-up with `email` in the body returns 400 `validation_failed` (unknown field).
 - [ ] A body with an unknown field returns 400 `validation_failed`.
 - [ ] Replaying a sign-up with the same `Idempotency-Key` and body returns the original 201 and creates no second user.
 - [ ] Refresh rotates the token, and the old token works again only within 30 s, returning the same pair.
 - [ ] Reusing an old refresh token after 30 s returns 401 `session_revoked`, and its descendants stop working.
 - [ ] Sign-out returns 204, works with an expired access token, and makes the refresh token fail with 401.
 - [ ] An expired access token on `GET /v1/me` returns 401 `token_expired`, not `invalid_token`.
-- [ ] Sign-in with the right email (in any case) and password returns 200 with a new session, and the other sessions keep working.
-- [ ] Sign-in with an unknown email and with a wrong password returns the same 401 `invalid_credentials` body.
-- [ ] The 11th sign-in for one email within an hour returns 429, even from different IPs.
+- [ ] Sign-in with the right phone (E.164) and password returns 200 with a new session, and the other sessions keep working.
+- [ ] Sign-in with an unknown phone and with a wrong password returns the same 401 `invalid_credentials` body.
+- [ ] The 11th sign-in for one phone within an hour returns 429, even from different IPs.
 - [ ] A user whose session ended (signed out, or revoked by reuse detection) can sign in again.
 - [ ] Sign-out with a refresh token of another user returns 204 and that user's session keeps working.
 - [ ] No password, token or full request body appears in the logs. The logger redacts at least
       `req.headers.authorization`, `password`, `refreshToken`, `accessToken`, `Idempotency-Key`, and the
-      `fullName`, `phone` and `email` fields. A user is named in logs by `user.id` only.
-- [ ] A `GET /v1/me` with a relay device token answers 401 `invalid_token`, and a `POST /v1/sos` with an
-      access token answers 401 `unauthorized`: the two kinds of token are never accepted for each other.
+      `fullName` and `phone` fields. A user is named in logs by `user.id` only.
+- [ ] `GET /v1/me` and `POST /v1/sos` both accept the access token; there is no separate SOS credential.
 
 ---
 
-## 8. Not in the demo
+## 8. Not in the pilot
 
 | Topic | Rule for now |
 |---|---|
-| Sending an SOS | The demo app sends none. The relay's SOS endpoints are unchanged and unused by the app. |
-| Account ↔ device link | None. An access token says nothing about a device, and a device token says nothing about a user. When SOS returns to the app, both tokens are needed on `POST /v1/sos`, and they cannot both use `Authorization`. That change (a second header, or one token carrying both) is decided then, in both contracts at once. |
-| Phone verification | Not built. `phoneVerified` is always `false`. |
+| Email on accounts | Removed. Sign-in and sign-up are phone-only. |
+| Phone verification | Not built. `phoneVerified` is always `false`. SMS before a Core-bound SOS is required before public release ([`live-sos-plan.md`](live-sos-plan.md) §9). |
 | Data retention | Accounts are **not** purged automatically, unlike SOS data (deleted after 30 days). Expired and revoked refresh tokens are deleted 7 days after they expire or are revoked; sign-up idempotency records 24 hours after they are created; sign-in attempts after 1 hour. Every account created during the demo is deleted before a public release; this is an operator action. After it, the server answers `401 session_revoked` to that account's access tokens and `401 invalid_refresh_token` to its refresh tokens, so the app ends the session and shows sign-in. Signing in then fails with `invalid_credentials`, and signing up again is possible. |
 | Deleting an account | No endpoint during the demo. A user who asks is removed by an operator. Needed before a store release (both stores require in-app account deletion). |
 | Password reset | Not built. A user who forgets their password cannot get back in during the demo; an operator can delete the account so they can sign up again. |

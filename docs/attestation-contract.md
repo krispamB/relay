@@ -1,5 +1,12 @@
 # Attestation contract (app → relay)
 
+> **Retired (pilot).** Device registration, Play Integrity, App Attest and `X-Attestation` on SOS are
+> removed for the live SOS pilot. Decisions: [`live-sos-plan.md`](live-sos-plan.md) D2 and D19.
+> Attestation may return before a **public** store release (plan §9). For the current app flow see
+> [`app-api-contract.md`](app-api-contract.md) and [`auth-contract.md`](auth-contract.md).
+>
+> The body below is **historical** documentation of the old device-token model.
+
 This is what the app must send so the relay can prove that a request comes from a genuine install.
 It matches `src/attestation/` exactly. When the two disagree, the code is right and this file is a bug.
 
