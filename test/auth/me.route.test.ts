@@ -39,7 +39,7 @@ async function setup() {
     clock,
     config: {
       ...base,
-      auth: { enabled: true, tokenSecret: SECRET },
+      auth: { tokenSecret: SECRET },
       // Above the per-user cap, so a 429 here is the user limit and not the relay's per-IP limit.
       limits: { ...base.limits, requestsPerIpPerMinute: 10_000 },
     },

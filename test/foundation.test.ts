@@ -21,13 +21,15 @@ const baseEnv = {
   STATUS_TOKEN_SECRET: 'a'.repeat(32),
   PHONE_HASH_SECRET: 'b'.repeat(32),
   ADMIN_TOKEN: 'c'.repeat(32),
+  AUTH_TOKEN_SECRET: 'd'.repeat(32),
 };
 
 describe('config', () => {
   it('loads a valid environment with defaults', () => {
     const c = loadConfig(baseEnv);
     expect(c.resgrid.apiBase).toBe('https://core.example.org');
-    expect(c.limits.sosPerDevicePer24h).toBe(3);
+    expect(c.limits.sosPerUserPer24h).toBe(3);
+    expect(c.sosNatureText).toBe('SOS – caller recording to follow');
     expect(c.host).toBe('::');
   });
 
@@ -54,34 +56,29 @@ describe('config', () => {
     expect(() => loadConfig({ ...prod, ALLOW_SOCKET_IP_IN_PRODUCTION: 'true' })).not.toThrow();
   });
 
-  it('leaves auth off by default, with no secret needed', () => {
-    expect(loadConfig(baseEnv).auth).toEqual({ enabled: false, tokenSecret: '' });
-    expect(loadConfig({ ...baseEnv, AUTH_ENABLED: 'false' }).auth.enabled).toBe(false);
-  });
-
-  it('refuses auth on without a token secret of at least 32 bytes', () => {
-    const on = { ...baseEnv, AUTH_ENABLED: 'true' };
-    expect(() => loadConfig(on)).toThrow(/AUTH_TOKEN_SECRET is required/);
-    expect(() => loadConfig({ ...on, AUTH_TOKEN_SECRET: 'x'.repeat(31) })).toThrow(
+  it('always needs the auth token secret, of at least 32 bytes', () => {
+    const { AUTH_TOKEN_SECRET: _omit, ...without } = baseEnv;
+    expect(() => loadConfig(without)).toThrow(/AUTH_TOKEN_SECRET is required/);
+    expect(() => loadConfig({ ...baseEnv, AUTH_TOKEN_SECRET: 'x'.repeat(31) })).toThrow(
       /AUTH_TOKEN_SECRET must be at least 32 bytes/,
     );
-    expect(loadConfig({ ...on, AUTH_TOKEN_SECRET: 'x'.repeat(32) }).auth).toEqual({
-      enabled: true,
-      tokenSecret: 'x'.repeat(32),
-    });
+    expect(loadConfig(baseEnv).auth).toEqual({ tokenSecret: 'd'.repeat(32) });
   });
 
-  it('rejects a bad AUTH_ENABLED value', () => {
-    expect(() => loadConfig({ ...baseEnv, AUTH_ENABLED: 'yes' })).toThrow(
-      /AUTH_ENABLED must be "true" or "false"/,
-    );
+  it('has no AUTH_ENABLED switch any more: the value is ignored', () => {
+    expect(loadConfig({ ...baseEnv, AUTH_ENABLED: 'false' }).auth).toEqual({ tokenSecret: 'd'.repeat(32) });
   });
 
-  it('does not check the auth secret while auth is off', () => {
-    expect(loadConfig({ ...baseEnv, AUTH_TOKEN_SECRET: 'short' }).auth).toEqual({
-      enabled: false,
-      tokenSecret: '',
+  it('reads the per-user SOS limit and the SOS nature text', () => {
+    const c = loadConfig({
+      ...baseEnv,
+      LIMIT_SOS_PER_USER_PER_24H: '5',
+      SOS_NATURE_TEXT: '  SOS – listen to the recording  ',
     });
+    expect(c.limits.sosPerUserPer24h).toBe(5);
+    expect(c.sosNatureText).toBe('SOS – listen to the recording');
+    expect(() => loadConfig({ ...baseEnv, SOS_NATURE_TEXT: 'x'.repeat(201) })).toThrow(/SOS_NATURE_TEXT/);
+    expect(() => loadConfig({ ...baseEnv, SOS_NATURE_TEXT: 'SOS\u0007' })).toThrow(/SOS_NATURE_TEXT/);
   });
 
   it('needs platform settings in enforce mode', () => {
@@ -175,30 +172,28 @@ describe('database-backed foundation', () => {
     expect(unavailableReason(await getState(ctx.db), ctx.clock.now())).toBe('unverified');
   });
 
-  it('enforces one open submission per device and one row per idempotency key', async () => {
+  it('enforces one open submission per user and one row per idempotency key', async () => {
     const ctx = createTestContext();
     const now = ctx.clock.now();
     await ctx.db
-      .insertInto('devices')
+      .insertInto('users')
       .values({
-        id: 'dev_1',
-        platform: 'ios',
-        token_hash: 'h',
-        token_expires_at: now,
-        attested: false,
+        id: 'usr_1',
+        full_name: 'Ade',
+        phone: '+2348012345678',
+        password_hash: '$argon2id$stub',
         created_at: now,
         updated_at: now,
       })
       .execute();
     const row = (id: string, key: string, reference: string) => ({
       id,
-      device_id: 'dev_1',
+      user_id: 'usr_1',
       idempotency_key: key,
       intake_code: 'TEST-DEPT',
       reference,
       status: 'queued' as const,
-      nature_id: 'fire',
-      nature_label: 'Fire',
+      nature_label: 'SOS – caller recording to follow',
       phone: '+2348012345678',
       phone_hash: 'ph',
       ip: '203.0.113.1',
@@ -214,7 +209,7 @@ describe('database-backed foundation', () => {
       .values(row('sos_b', 'k2', 'SOS-BBBB'))
       .execute()
       .catch((e) => e);
-    expect(isUniqueViolation(second, 'submissions_one_open_per_device_idx')).toBe(true);
+    expect(isUniqueViolation(second, 'submissions_one_open_per_user_idx')).toBe(true);
 
     await ctx.db.updateTable('submissions').set({ status: 'closed' }).where('id', '=', 'sos_a').execute();
     await ctx.db

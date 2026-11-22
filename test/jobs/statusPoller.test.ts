@@ -16,7 +16,7 @@ import {
 import { getState, pauseDelivery } from '../../src/state.js';
 import { eventsFor, getSubmission } from '../delivery/fixtures.js';
 import { closeTestDb, createTestContext, DEMO_INTAKE_CODE, resetDb, unusedCore } from '../helpers/context.js';
-import { deliverToMock, insertDevice, insertSubmissionOn, mockContext, strikesFor } from './fixtures.js';
+import { deliverToMock, insertSubmissionOn, insertUser, mockContext, strikesFor } from './fixtures.js';
 
 let mock: RunningMockCore;
 
@@ -133,7 +133,7 @@ describe('status poller: state changes (PRD §8.5, integration.md §5.3)', () =>
     ctx.clock.advance(RECEIVED_INTERVAL_MS);
     await runStatusPollerPass(ctx);
     expect(await getSubmission(ctx.db, id)).toMatchObject({ status: 'closed', core_state: state });
-    expect((await strikesFor(ctx.db, id)).map((s) => s.subject_type).sort()).toEqual(['device', 'phone']);
+    expect((await strikesFor(ctx.db, id)).map((s) => s.subject_type).sort()).toEqual(['phone', 'user']);
   });
 
   it.each([1, 2, 4, 5, 6])('non-hoax closing state %i records no strike', async (state) => {
@@ -538,17 +538,17 @@ describe('status poller: pause and Core failures (PRD §8.4, integration.md §5.
   });
 });
 
-describe('status poller: re-open while the device has a newer open SOS', () => {
+describe('status poller: re-open while the user has a newer open SOS', () => {
   it('keeps the old submission closed, records why, and applies the re-open once the newer one closes', async () => {
     const ctx = mockContext(mock);
-    const deviceId = await insertDevice(ctx.db, ctx.clock.now());
-    const old = await deliverToMock(ctx, { deviceId });
+    const userId = await insertUser(ctx.db, ctx.clock.now());
+    const old = await deliverToMock(ctx, { userId });
     mock.control.setCallState(old.callId, 1);
     ctx.clock.advance(RECEIVED_INTERVAL_MS);
     await runStatusPollerPass(ctx);
     expect(await status(ctx, old.id)).toBe('closed');
 
-    const newer = await deliverToMock(ctx, { deviceId });
+    const newer = await deliverToMock(ctx, { userId });
     mock.control.setCallState(old.callId, 0);
     ctx.clock.advance(CLOSED_INTERVAL_MS);
     await runStatusPollerPass(ctx);
@@ -581,8 +581,8 @@ describe('status poller: re-open while the device has a newer open SOS', () => {
 
 describe('status poller: demo submissions (PRD §6.3, AC11)', () => {
   async function insertDemo(ctx: ReturnType<typeof createTestContext>): Promise<string> {
-    const deviceId = await insertDevice(ctx.db, ctx.clock.now());
-    const id = await insertSubmissionOn(ctx.db, deviceId, ctx.clock.now(), {
+    const userId = await insertUser(ctx.db, ctx.clock.now());
+    const id = await insertSubmissionOn(ctx.db, userId, ctx.clock.now(), {
       is_demo: true,
       intake_code: DEMO_INTAKE_CODE,
     });

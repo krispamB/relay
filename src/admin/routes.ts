@@ -289,7 +289,7 @@ export async function adminRoutes(app: AdminApp, ctx: AppContext): Promise<void>
       schema: {
         body: Type.Union([
           Type.Object(
-            { deviceId: Type.String({ minLength: 1, maxLength: 64 }), reason: reasonField, days },
+            { userId: Type.String({ minLength: 1, maxLength: 64 }), reason: reasonField, days },
             { additionalProperties: false },
           ),
           Type.Object(
@@ -301,12 +301,12 @@ export async function adminRoutes(app: AdminApp, ctx: AppContext): Promise<void>
       },
     },
     async (req, reply) => {
-      const body = req.body as { deviceId?: string; phone?: string; reason: string; days?: number };
-      let subjectType: 'device' | 'phone';
+      const body = req.body as { userId?: string; phone?: string; reason: string; days?: number };
+      let subjectType: 'user' | 'phone';
       let subject: string;
-      if (body.deviceId !== undefined) {
-        subjectType = 'device';
-        subject = body.deviceId;
+      if (body.userId !== undefined) {
+        subjectType = 'user';
+        subject = body.userId;
       } else {
         const parsed = parsePhoneNumberFromString(body.phone ?? '');
         if (!parsed?.isValid()) {

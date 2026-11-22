@@ -149,10 +149,8 @@ export async function buildPublicApp(ctx: AppContext): Promise<PublicApp> {
       components: {
         securitySchemes: {
           deviceToken: { type: 'http', scheme: 'bearer' },
-          // The auth endpoints' own bearer token, never accepted in place of a device token.
-          ...(ctx.config.auth.enabled
-            ? { accessToken: { type: 'http' as const, scheme: 'bearer', bearerFormat: 'JWT' } }
-            : {}),
+          // The signed-in user's access token: the SOS routes and the authenticated auth routes.
+          accessToken: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
         },
       },
     },
@@ -185,7 +183,7 @@ export async function buildPublicApp(ctx: AppContext): Promise<PublicApp> {
   await statusRoutes(app, ctx);
 
   // Encapsulated: its own error handler. Registered after the per-IP limiter hook, which it inherits.
-  if (ctx.config.auth.enabled) await app.register(authPlugin, { ctx });
+  await app.register(authPlugin, { ctx });
 
   return app;
 }

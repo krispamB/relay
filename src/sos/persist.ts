@@ -11,7 +11,7 @@
 import { sql } from 'kysely';
 import type { AppContext } from '../context.js';
 import { type Db, isUniqueViolation } from '../db/index.js';
-import { type Device, OPEN_STATUSES, type Submission } from '../db/types.js';
+import { OPEN_STATUSES, type Submission } from '../db/types.js';
 import { newReceiptId, newReference } from '../ids.js';
 import type { Intake } from '../intakes.js';
 import { getState, type UnavailableReason, unavailableReason } from '../state.js';
@@ -19,8 +19,8 @@ import { INLINE_HOLD_US } from './budget.js';
 import { checkSosLimits, type LimitHit } from './limits.js';
 import type { SosContent } from './validate.js';
 
-export const IDEMPOTENCY_CONSTRAINT = 'submissions_device_id_idempotency_key_key';
-export const OPEN_SUBMISSION_CONSTRAINT = 'submissions_one_open_per_device_idx';
+export const IDEMPOTENCY_CONSTRAINT = 'submissions_user_id_idempotency_key_key';
+export const OPEN_SUBMISSION_CONSTRAINT = 'submissions_one_open_per_user_idx';
 export const REFERENCE_CONSTRAINT = 'submissions_reference_key';
 
 /** Attempts at a fresh reference before giving up. 31^4 ≈ 923k codes; collisions are rare. */
@@ -28,27 +28,27 @@ const MAX_INSERT_TRIES = 5;
 
 export async function findByIdempotencyKey(
   db: Db,
-  deviceId: string,
+  userId: string,
   idempotencyKey: string,
 ): Promise<Submission | undefined> {
   return db
     .selectFrom('submissions')
     .selectAll()
-    .where('device_id', '=', deviceId)
+    .where('user_id', '=', userId)
     .where('idempotency_key', '=', idempotencyKey)
     .executeTakeFirst();
 }
 
-/** The device's open SOS of the same kind. Real and demo submissions never stand in for each other. */
+/** The user's open SOS of the same kind. Real and demo submissions never stand in for each other. */
 export async function findOpenSubmission(
   db: Db,
-  deviceId: string,
+  userId: string,
   isDemo: boolean,
 ): Promise<Submission | undefined> {
   return db
     .selectFrom('submissions')
     .selectAll()
-    .where('device_id', '=', deviceId)
+    .where('user_id', '=', userId)
     .where('is_demo', '=', isDemo)
     .where('status', 'in', OPEN_STATUSES)
     .executeTakeFirst();
@@ -59,11 +59,15 @@ export async function getSubmissionById(db: Db, id: string): Promise<Submission 
 }
 
 export interface PersistInput {
-  device: Device;
+  userId: string;
+  /** The account's phone in E.164: stored as the callback number. */
+  phone: string;
+  phoneHash: string;
   idempotencyKey: string;
   intake: Intake;
   content: SosContent;
-  phoneHash: string;
+  /** The relay's fixed nature text (SOS_NATURE_TEXT). */
+  natureLabel: string;
   ip: string;
 }
 
@@ -88,7 +92,7 @@ export async function persistSubmission(ctx: AppContext, input: PersistInput): P
 
 /**
  * Turns a lost insert race into the response the winner's row calls for: a concurrent identical
- * request makes this a replay, a concurrent different SOS from the device makes it a 409.
+ * request makes this a replay, a concurrent different SOS from the user makes it a 409.
  * 'retry' runs the whole step again (a reference collision, or the winner's row already gone or closed).
  */
 async function afterUniqueViolation(
@@ -97,11 +101,11 @@ async function afterUniqueViolation(
   err: unknown,
 ): Promise<PersistOutcome | 'retry' | undefined> {
   if (isUniqueViolation(err, IDEMPOTENCY_CONSTRAINT)) {
-    const row = await findByIdempotencyKey(db, input.device.id, input.idempotencyKey);
+    const row = await findByIdempotencyKey(db, input.userId, input.idempotencyKey);
     return row ? { kind: 'replay', row } : 'retry';
   }
   if (isUniqueViolation(err, OPEN_SUBMISSION_CONSTRAINT)) {
-    const row = await findOpenSubmission(db, input.device.id, input.intake.demo);
+    const row = await findOpenSubmission(db, input.userId, input.intake.demo);
     return row ? { kind: 'open', row } : 'retry';
   }
   if (isUniqueViolation(err, REFERENCE_CONSTRAINT)) return 'retry';
@@ -109,14 +113,14 @@ async function afterUniqueViolation(
 }
 
 async function persistOnce(ctx: AppContext, input: PersistInput): Promise<PersistOutcome> {
-  const { device, intake, content } = input;
+  const { userId, intake, content } = input;
   return ctx.db.transaction().execute(async (trx): Promise<PersistOutcome> => {
     await sql`select pg_advisory_xact_lock(hashtextextended(${`sos-intake:${intake.code}`}, 0))`.execute(trx);
 
     // Steps 6 and 7 again, now that concurrent requests for this intake are serialised.
-    const replay = await findByIdempotencyKey(trx, device.id, input.idempotencyKey);
+    const replay = await findByIdempotencyKey(trx, userId, input.idempotencyKey);
     if (replay) return { kind: 'replay', row: replay };
-    const open = await findOpenSubmission(trx, device.id, intake.demo);
+    const open = await findOpenSubmission(trx, userId, intake.demo);
     if (open) return { kind: 'open', row: open };
 
     const now = ctx.clock.now();
@@ -125,7 +129,7 @@ async function persistOnce(ctx: AppContext, input: PersistInput): Promise<Persis
     const hit = await checkSosLimits(
       trx,
       {
-        deviceId: device.id,
+        userId,
         phoneHash: input.phoneHash,
         ip: input.ip,
         intakeCode: intake.code,
@@ -148,24 +152,21 @@ async function persistOnce(ctx: AppContext, input: PersistInput): Promise<Persis
       .insertInto('submissions')
       .values({
         id: newReceiptId(now.getTime()),
-        device_id: device.id,
+        user_id: userId,
         idempotency_key: input.idempotencyKey,
         intake_code: intake.code,
         is_demo: intake.demo,
         reference: newReference(),
         status: 'queued',
-        nature_id: content.natureId,
-        nature_label: content.natureLabel,
-        phone: content.phoneE164,
+        nature_label: input.natureLabel,
+        phone: input.phone,
         phone_hash: input.phoneHash,
-        name: content.name,
         lat: loc?.lat ?? null,
         lon: loc?.lon ?? null,
         accuracy_m: loc?.accuracyM ?? null,
         location_captured_at: loc?.capturedAt ?? null,
         location_source: loc?.source ?? null,
         address: content.address,
-        details: content.details,
         ip: input.ip,
         next_attempt_at: sql<Date>`${now}::timestamptz + ${sql.raw(`interval '${INLINE_HOLD_US} microseconds'`)}`,
         accepted_at: now,

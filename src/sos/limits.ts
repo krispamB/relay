@@ -8,10 +8,10 @@ import { DAY, HOUR, SECOND } from '../clock.js';
 import type { Limits } from '../config.js';
 import type { Db } from '../db/index.js';
 
-export type LimitRule = 'sos_per_device' | 'sos_per_phone' | 'sos_per_ip' | 'intake_breaker';
+export type LimitRule = 'sos_per_user' | 'sos_per_phone' | 'sos_per_ip' | 'intake_breaker';
 
 export interface LimitScope {
-  deviceId: string;
+  userId: string;
   phoneHash: string;
   ip: string;
   intakeCode: string;
@@ -28,7 +28,7 @@ interface Rule {
   rule: LimitRule;
   max: number;
   windowMs: number;
-  column: 'device_id' | 'phone_hash' | 'ip' | 'intake_code';
+  column: 'user_id' | 'phone_hash' | 'ip' | 'intake_code';
   value: string;
 }
 
@@ -36,11 +36,11 @@ interface Rule {
 export function sosRules(scope: LimitScope, limits: Limits): Rule[] {
   return [
     {
-      rule: 'sos_per_device',
-      max: limits.sosPerDevicePer24h,
+      rule: 'sos_per_user',
+      max: limits.sosPerUserPer24h,
       windowMs: DAY,
-      column: 'device_id',
-      value: scope.deviceId,
+      column: 'user_id',
+      value: scope.userId,
     },
     {
       rule: 'sos_per_phone',

@@ -103,7 +103,7 @@ export async function runPurgePass(ctx: AppContext): Promise<PurgeCounts> {
           .executeTakeFirst(),
       ),
     ),
-    // Registrations go with their device (ON DELETE CASCADE). A device with a submission left is kept.
+    // Registrations go with their device (ON DELETE CASCADE). Submissions belong to users now.
     devices: await inBatches(async () =>
       count(
         await db
@@ -115,15 +115,6 @@ export async function runPurgePass(ctx: AppContext): Promise<PurgeCounts> {
               .selectFrom('devices')
               .select('devices.id')
               .where('token_expires_at', '<', deviceCutoff)
-              .where(({ not, exists, selectFrom }) =>
-                not(
-                  exists(
-                    selectFrom('submissions')
-                      .select('submissions.id')
-                      .whereRef('submissions.device_id', '=', 'devices.id'),
-                  ),
-                ),
-              )
               .limit(PURGE_BATCH),
           )
           .executeTakeFirst(),

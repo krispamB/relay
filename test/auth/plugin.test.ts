@@ -73,8 +73,6 @@ vi.mock('../../src/auth/routes/signout.js', async () => {
 vi.mock('../../src/auth/routes/me.js', () => ({ meRoutes: async () => {} }));
 vi.mock('../../src/auth/routes/signin.js', () => ({ signinRoutes: async () => {} }));
 
-const AUTH_ON = { enabled: true, tokenSecret: 'auth-token-secret-for-tests-0123456789ab' };
-
 beforeEach(() => resetDb());
 afterAll(() => closeTestDb());
 
@@ -83,11 +81,10 @@ afterEach(async () => {
   for (const app of open.splice(0)) await app.close();
 });
 
-async function setup(opts: { auth?: boolean; perIp?: number } = {}) {
+async function setup(opts: { perIp?: number } = {}) {
   const base = testConfig();
   const config = {
     ...base,
-    auth: opts.auth === false ? { ...base.auth, enabled: false } : AUTH_ON,
     limits: { ...base.limits, ...(opts.perIp === undefined ? {} : { requestsPerIpPerMinute: opts.perIp }) },
   };
   const ctx = createTestContext({ config });
@@ -123,32 +120,7 @@ const post = (
     payload: typeof payload === 'string' ? payload : JSON.stringify(payload),
   });
 
-describe('auth disabled (the default)', () => {
-  it.each([
-    ['POST', '/v1/auth/signup'],
-    ['POST', '/v1/auth/refresh'],
-    ['POST', '/v1/auth/signout'],
-    ['GET', '/v1/auth/anything'],
-  ])('%s %s is the relay 404', async (method, url) => {
-    const { app } = await setup({ auth: false });
-    const res = await app.inject({
-      method: method as 'GET' | 'POST',
-      url,
-      payload: method === 'POST' ? {} : undefined,
-    });
-    expect(res.statusCode).toBe(404);
-    expect(res.json()).toEqual({ error: { code: 'not_found', message: 'Not found.' } });
-  });
-
-  it('keeps the relay error handling for the SOS routes', async () => {
-    const { app } = await setup({ auth: false });
-    const res = await post(app, '/v1/devices/register', '{');
-    expect(res.statusCode).toBe(400);
-    expect(res.json().error.code).toBe('invalid_request');
-  });
-});
-
-describe('auth enabled', () => {
+describe('the auth plugin', () => {
   it('serves the routes the plugin mounts, with the contract content type', async () => {
     const { app } = await setup();
     const res = await post(app, '/v1/auth/signup', validBody());
@@ -172,9 +144,9 @@ describe('auth enabled', () => {
 
   it('keeps the relay error body on the SOS routes outside the plugin', async () => {
     const { app } = await setup();
-    const res = await post(app, '/v1/devices/register', '{');
-    expect(res.statusCode).toBe(400);
-    expect(res.json().error.code).toBe('invalid_request');
+    const res = await app.inject({ method: 'GET', url: '/v1/intake/NO-SUCH-INTAKE' });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: { code: 'not_found', message: 'Not found.' } });
   });
 
   it('does not run Fastify body schema validation on its routes', async () => {
@@ -201,7 +173,7 @@ describe('auth enabled', () => {
   });
 });
 
-describe('auth enabled: malformed requests', () => {
+describe('the auth plugin: malformed requests', () => {
   it.each([
     ['invalid JSON', '{', 'application/json'],
     ['truncated JSON', '{"fullName":"Ada"', 'application/json'],
@@ -233,7 +205,7 @@ describe('auth enabled: malformed requests', () => {
   });
 });
 
-describe('auth enabled: validation_failed over HTTP', () => {
+describe('the auth plugin: validation_failed over HTTP', () => {
   it('lists every invalid field in the contract body', async () => {
     const { app } = await setup();
     const res = await post(app, '/v1/auth/signup', {
@@ -274,7 +246,7 @@ describe('auth enabled: validation_failed over HTTP', () => {
   });
 });
 
-describe('auth enabled: body size', () => {
+describe('the auth plugin: body size', () => {
   it('16 385 bytes → 413 payload_too_large', async () => {
     const { app } = await setup();
     const body = jsonOfSize(16_385);
@@ -301,7 +273,7 @@ describe('auth enabled: body size', () => {
   });
 });
 
-describe('auth enabled: the plugin error handler', () => {
+describe('the auth plugin: the plugin error handler', () => {
   it.each([
     ['phone_taken', 409],
     ['idempotency_key_reused', 422],

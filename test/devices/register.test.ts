@@ -5,7 +5,6 @@ import { DAY, MINUTE, SECOND } from '../../src/clock.js';
 import { DEFAULT_LIMITS } from '../../src/config.js';
 import { ipHash, randomToken } from '../../src/crypto.js';
 import { deviceTokenHash, requireDevice } from '../../src/devices/auth.js';
-import { newBlockId } from '../../src/ids.js';
 import { METRICS } from '../../src/metrics.js';
 import { closeTestDb, createTestContext, resetDb, type TestContext, testConfig } from '../helpers/context.js';
 import { seedDevice } from '../helpers/seed.js';
@@ -291,33 +290,6 @@ describe('POST /v1/devices/register: renewal', () => {
     expect((await requireDevice(ctx, authAs(android.token))).id).toBe(android.device.id);
     expect((await deviceRow(android.device.id)).platform).toBe('android');
     expect(logs.text()).toContain('renewal_platform_mismatch');
-  });
-
-  it('refuses a blocked device and keeps its identity', async () => {
-    const seeded = await seedDevice(ctx);
-    const now = ctx.clock.now();
-    await ctx.db
-      .insertInto('blocks')
-      .values({
-        id: newBlockId(now.getTime()),
-        subject_type: 'device',
-        subject: seeded.device.id,
-        reason: 'hoax',
-        source: 'manual',
-        created_at: now,
-        expires_at: new Date(now.getTime() + 30 * DAY),
-      })
-      .execute();
-    const res = await register(app, { token: seeded.token });
-    expect(res.statusCode).toBe(403);
-    expect(res.json()).toEqual(FORBIDDEN_BODY);
-    expect(attestation.calls).toHaveLength(0);
-    expect((await deviceRow(seeded.device.id)).token_hash).toBe(deviceTokenHash(seeded.token));
-
-    ctx.clock.advance(30 * DAY);
-    const after = await register(app, { token: seeded.token });
-    expect(after.statusCode).toBe(201);
-    expect(after.json().deviceId).toBe(seeded.device.id);
   });
 
   it('gives only one of two concurrent renewals of one token the device', async () => {

@@ -43,7 +43,7 @@ async function setup(opts: { perIp?: number; logLines?: string[] } = {}) {
   const base = testConfig();
   const config = {
     ...base,
-    auth: { enabled: true, tokenSecret: SECRET },
+    auth: { tokenSecret: SECRET },
     limits: { ...base.limits, ...(opts.perIp === undefined ? {} : { requestsPerIpPerMinute: opts.perIp }) },
   };
   const lines = opts.logLines;

@@ -15,6 +15,7 @@ x-relay-env: &relay-env
   STATUS_TOKEN_SECRET: dev-only-status-token-secret-not-for-production-0001
   PHONE_HASH_SECRET: dev-only-phone-hash-secret-not-for-production-0001
   ADMIN_TOKEN: dev-only-admin-token-not-for-production-000000001
+  AUTH_TOKEN_SECRET: dev-only-auth-token-secret-not-for-production-0001
 
 services:
   postgres:

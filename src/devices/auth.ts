@@ -1,4 +1,5 @@
 import type { FastifyRequest } from 'fastify';
+import { bearerToken } from '../auth/requireUser.js';
 import type { AppContext } from '../context.js';
 import { sha256Hex } from '../crypto.js';
 import type { Device } from '../db/types.js';
@@ -9,12 +10,7 @@ export function deviceTokenHash(token: string): string {
   return sha256Hex(`device:${token}`);
 }
 
-export function bearerToken(req: FastifyRequest): string | undefined {
-  const header = req.headers.authorization;
-  if (!header?.startsWith('Bearer ')) return undefined;
-  const token = header.slice(7).trim();
-  return token === '' ? undefined : token;
-}
+export { bearerToken };
 
 /** Finds the device for a token, whether or not the token has expired. Used by renewal. */
 export async function findDeviceByToken(ctx: AppContext, token: string): Promise<Device | undefined> {

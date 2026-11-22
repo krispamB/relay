@@ -3,15 +3,13 @@
  *
  * The public app is built with a stand-in context: building the routes needs the configuration's
  * shape, never a database, Core or attestation. Nothing here connects anywhere.
- * Auth is switched ON in the stand-in, so docs/openapi.json documents the whole API, auth routes
- * included. A relay running with AUTH_ENABLED=false serves the same document without them.
  * Used by scripts/export-openapi.ts (writes docs/openapi.json) and by test/docs/openapi.test.ts
  * (fails when the committed file is out of date).
  */
 import { NoopAlerter } from '../src/alerts.js';
 import { buildPublicApp } from '../src/app.js';
 import { systemClock } from '../src/clock.js';
-import { type Config, DEFAULT_LIMITS } from '../src/config.js';
+import { type Config, DEFAULT_LIMITS, DEFAULT_SOS_NATURE_TEXT } from '../src/config.js';
 import type { AppContext } from '../src/context.js';
 import type { CoreClient } from '../src/core/types.js';
 import { createDb } from '../src/db/index.js';
@@ -56,8 +54,9 @@ function standInConfig(): Config {
     statusTokenSecret: 'unused',
     phoneHashSecret: 'unused',
     adminToken: 'unused',
-    // On, so the auth routes are in the document. The secret is never used: no token is signed here.
-    auth: { enabled: true, tokenSecret: 'unused-while-rendering-the-openapi-document' },
+    // The secret is never used: no token is signed here.
+    auth: { tokenSecret: 'unused-while-rendering-the-openapi-document' },
+    sosNatureText: DEFAULT_SOS_NATURE_TEXT,
     alertWebhookUrl: undefined,
     demoDispatchAfterS: 30,
     demoCloseAfterS: 90,

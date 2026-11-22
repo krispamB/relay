@@ -85,7 +85,7 @@ beforeEach(async () => {
     log,
     config: {
       ...base,
-      auth: { enabled: true, tokenSecret: 'auth-token-secret-for-tests-0123456789ab' },
+      auth: { tokenSecret: 'auth-token-secret-for-tests-0123456789ab' },
       // Above anything one walk sends, so a 429 here could only be an auth limit.
       limits: { ...base.limits, requestsPerIpPerMinute: 10_000 },
     },
@@ -164,17 +164,6 @@ const signin = (phone: string, password: string) =>
       device: { platform: 'android', appVersion: '0.3.0', installId: INSTALL_ID },
     },
   });
-
-async function registerDevice(): Promise<string> {
-  const nonce = await call('GET', '/v1/devices/nonce');
-  expect(nonce.status).toBe(200);
-  const reg = await call('POST', '/v1/devices/register', {
-    body: { platform: 'android', nonce: nonce.body.nonce },
-  });
-  expect(reg.status).toBe(201);
-  remember('deviceToken', reg.body.deviceToken);
-  return reg.body.deviceToken as string;
-}
 
 // ---------------------------------------------------------------------------------------------
 
@@ -378,24 +367,16 @@ describe('docs/auth-contract.md §7: acceptance checklist', () => {
     expect(unknown.body.error.code).toBe('invalid_credentials');
   });
 
-  it('A `GET /v1/me` with a relay device token answers 401 `invalid_token`, and a `POST /v1/sos` with an access token answers 401 `unauthorized`: the two kinds of token are never accepted for each other.', async () => {
-    const deviceToken = await registerDevice();
+  it('The access token is the SOS token: `POST /v1/sos` with it is accepted, and without it is 401 `invalid_token`.', async () => {
     const { session } = await newUser();
 
-    const meWithDevice = await me(deviceToken);
-    expect(meWithDevice.status).toBe(401);
-    expect(meWithDevice.body.error.code).toBe('invalid_token');
+    const without = await postSos(app, { body: sosBody(ctx) });
+    expect(without.status).toBe(401);
+    expect(without.body.error.code).toBe('invalid_token');
 
-    const sosWithAccess = await postSos(app, { token: session.accessToken, body: sosBody(ctx) });
-    expect(sosWithAccess.status).toBe(401);
-    expect(sosWithAccess.body.error.code).toBe('unauthorized');
-    remember('phone', sosBody(ctx).phone);
-    remember('name', sosBody(ctx).name);
-
-    // Each token still works where it belongs.
+    const sos = await postSos(app, { token: session.accessToken, body: sosBody(ctx) });
+    expect([201, 202]).toContain(sos.status);
     expect((await me(session.accessToken)).status).toBe(200);
-    const sosWithDevice = await postSos(app, { token: deviceToken, body: sosBody(ctx) });
-    expect([201, 202]).toContain(sosWithDevice.status);
   });
 
   // Runs after every other walk in this file, so the capture spans all of them (see the file comment).

@@ -77,7 +77,7 @@ const ROW_COLUMNS = [
   'is_demo',
   'core_call_id',
   'core_state',
-  'device_id',
+  'user_id',
   'phone_hash',
   'accepted_at',
   'delivered_at',
@@ -142,7 +142,7 @@ async function writeTransition(
 
 /**
  * PRD §8.5: after 24 hours, stop polling and close what is still open, or a call nobody closes in
- * Resgrid would keep the device from ever sending again. Clearing next_poll_at also means a later
+ * Resgrid would keep the user from ever sending again. Clearing next_poll_at also means a later
  * re-open in Core can never resurrect the submission.
  */
 async function closeExpiredWindows(ctx: AppContext): Promise<void> {
@@ -431,7 +431,7 @@ async function pollOne(ctx: AppContext, pass: PassState, row: Row): Promise<void
     await applyCallState(ctx, row, res.data);
   } catch (err) {
     if (!isUniqueViolation(err)) throw err;
-    // A newer SOS for the device was accepted between our check and the update: same as suppressed.
+    // A newer SOS for the user was accepted between our check and the update: same as suppressed.
     ctx.log.warn(ids(row), 'status change collided with a newer open SOS; will retry at the next poll');
   }
 }
@@ -489,13 +489,13 @@ async function applyCallState(ctx: AppContext, claimed: Row, result: CallStateRe
       return { kind: 'same', row, strikeOutcomes };
     }
 
-    // A re-open while the device already has a newer open SOS: the one-open-per-device rule holds,
+    // A re-open while the user already has a newer open SOS: the one-open-per-user rule holds,
     // the newer SOS is the caller's live one, and this submission stays closed (see report).
     if (row.status === 'closed') {
       const newer = await trx
         .selectFrom('submissions')
         .select(['id', 'reference'])
-        .where('device_id', '=', row.device_id)
+        .where('user_id', '=', row.user_id)
         .where('id', '!=', row.id)
         .where('is_demo', '=', row.is_demo)
         .where('status', 'in', OPEN_STATUSES)
@@ -571,7 +571,7 @@ async function applyCallState(ctx: AppContext, claimed: Row, result: CallStateRe
           newerReceiptId: applied.newer.id,
           newerReference: applied.newer.reference,
         },
-        'call re-opened in Core while the device has a newer open SOS; submission kept closed',
+        'call re-opened in Core while the user has a newer open SOS; submission kept closed',
       );
       break;
   }

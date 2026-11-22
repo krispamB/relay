@@ -43,7 +43,7 @@ afterEach(async () => {
 
 async function setup(opts: { log?: Logger } = {}) {
   const base = testConfig();
-  const config = { ...base, auth: { enabled: true, tokenSecret: AUTH_SECRET } };
+  const config = { ...base, auth: { tokenSecret: AUTH_SECRET } };
   const ctx: TestContext = createTestContext({ config, ...(opts.log ? { log: opts.log } : {}) });
   const app = await buildPublicApp(ctx);
   open.push(app);
@@ -530,7 +530,7 @@ describe('concurrency', () => {
         return args.result;
       },
     };
-    const config = { ...testConfig(), auth: { enabled: true, tokenSecret: AUTH_SECRET } };
+    const config = { ...testConfig(), auth: { tokenSecret: AUTH_SECRET } };
     const app = await buildPublicApp(createTestContext({ config, db: testDb().withPlugin(interleave) }));
     open.push(app);
     return { app, state };

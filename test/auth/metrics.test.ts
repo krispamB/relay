@@ -40,7 +40,7 @@ async function setup() {
     metrics,
     config: {
       ...base,
-      auth: { enabled: true, tokenSecret: SECRET },
+      auth: { tokenSecret: SECRET },
       limits: { ...base.limits, requestsPerIpPerMinute: 10_000 },
     },
   });

@@ -97,7 +97,6 @@ npm run format           # biome check --write .
 npm test                 # vitest run
 npm run mock-core        # mock Core on :4010 (PORT, MOCK_CORE_API_KEY override)
 npm run openapi          # regenerate docs/openapi.json after changing a route schema (a test fails if it is stale)
-npm run test:auth-on     # the whole suite with the auth plugin mounted (see below)
 npm run migrate:dev      # apply migrations to DATABASE_URL
 npm run dev              # relay with file watching (reads the environment; see .env.example)
 npm run build && npm start   # compiled build, as in the Docker image
@@ -108,8 +107,6 @@ npm run build && npm start   # compiled build, as in the Docker image
 ```sh
 TEST_DATABASE_URL=postgres://user:pass@localhost:5432/relay_test npm test
 ```
-
-**The suite with auth on.** Tests build their config with `testConfig()` (`test/helpers/context.ts`), where `auth.enabled` follows `TEST_AUTH_ENABLED` (default off). `npm run test:auth-on` (that is, `TEST_AUTH_ENABLED=true npm test`) runs every existing test with the auth plugin mounted and expectations unchanged, which shows the SOS routes behave the same beside it. Tests whose subject is auth on or off (`test/auth/plugin.test.ts`, `test/auth/isolation.test.ts`, the OpenAPI and e2e auth tests) set `auth.enabled` themselves, so they do not depend on the switch; `test/auth/isolation.test.ts` also runs a short SOS walk with auth on in the default run.
 
 `test/e2e/` wires the real public app, the real Core client, the mock Core and Postgres together; only attestation and the clock are fake. `npx vitest run test/e2e` runs just those.
 
@@ -125,7 +122,8 @@ TEST_DATABASE_URL=postgres://user:pass@localhost:5432/relay_test npm test
 | `INTAKES_JSON` or `INTAKES_FILE` | The intakes (see `intakes.example.json`). `INTAKES_JSON` wins when both are set. |
 | `ATTESTATION_MODE` | `enforce` (default) or `permissive`. The process refuses `permissive` when `NODE_ENV=production` unless `ALLOW_PERMISSIVE_IN_PRODUCTION=true`. Never run permissive on a public relay. |
 | `STATUS_TOKEN_SECRET`, `PHONE_HASH_SECRET`, `ADMIN_TOKEN` | At least 32 bytes each (`openssl rand -hex 32`). Changing the first invalidates every status token already handed out; changing the second orphans existing phone strikes and blocks. |
-| `AUTH_ENABLED`, `AUTH_TOKEN_SECRET` | `AUTH_ENABLED` (default `false`) mounts the demo app's auth routes ([Auth (demo app)](#auth-demo-app)); off, they do not exist and the relay behaves as before. `AUTH_TOKEN_SECRET` is required when auth is on, at least 32 bytes (`openssl rand -hex 32`). It signs access tokens and derives refresh tokens: changing it signs every user out. |
+| `AUTH_TOKEN_SECRET` | Required, at least 32 bytes (`openssl rand -hex 32`). Auth is always on: the SOS routes take the signed-in user's access token (`AUTH_ENABLED` is gone). It signs access tokens and derives refresh tokens: changing it signs every user out. |
+| `SOS_NATURE_TEXT` | The Nature of every SOS call in Core (default `SOS – caller recording to follow`), at most 200 characters. The caller sends no nature: the recording carries what happened. |
 | `CLIENT_IP_HEADER` | Header holding the caller's address. Unset locally. On Railway: `x-real-ip`. Wrong value means every caller shares one IP and the per-IP limits misfire. |
 | `ALERT_WEBHOOK_URL` | Where alerts go. Unset means alerts are only logged. |
 | `RUN_JOBS` | `false` runs the HTTP servers only (jobs elsewhere). |

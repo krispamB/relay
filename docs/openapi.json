@@ -538,7 +538,7 @@
         "tags": [
           "sos"
         ],
-        "description": "Order of checks: device token (401), device block (403), headers and body (400), attestation (403), intake (404/410), replay of the same Idempotency-Key (201/202), open SOS (409), phone block (403), rate limits (429, or 503 for the whole-intake breaker), availability (503), then persist and deliver. A 503 can also come after the SOS was saved, when Core refuses the relay's API key or delivery is paused before the inline attempt: the SOS is then marked failed, will never be delivered, and a replay of the same Idempotency-Key returns 201 `failed`.",
+        "description": "One tap: the body names the intake and where the caller is; the name and callback number are the account's. Order of checks: access token (401), user block (403), headers and body (400), intake (404/410), replay of the same Idempotency-Key (201/202), open SOS (409), phone block (403), rate limits (429, or 503 for the whole-intake breaker), availability (503), then persist and deliver. A 503 can also come after the SOS was saved, when Core refuses the relay's API key or delivery is paused before the inline attempt: the SOS is then marked failed, will never be delivered, and a replay of the same Idempotency-Key returns 201 `failed`.",
         "requestBody": {
           "required": true,
           "content": {
@@ -547,25 +547,12 @@
                 "additionalProperties": false,
                 "type": "object",
                 "required": [
-                  "intakeCode",
-                  "nature",
-                  "phone"
+                  "intakeCode"
                 ],
                 "properties": {
                   "intakeCode": {
                     "minLength": 1,
                     "maxLength": 64,
-                    "type": "string"
-                  },
-                  "nature": {
-                    "minLength": 1,
-                    "maxLength": 40,
-                    "description": "One of the intake's nature ids.",
-                    "type": "string"
-                  },
-                  "phone": {
-                    "pattern": "^\\+[1-9][0-9]{1,14}$",
-                    "description": "Callback number in E.164, valid per libphonenumber-js.",
                     "type": "string"
                   },
                   "location": {
@@ -623,14 +610,6 @@
                   "address": {
                     "description": "Up to 500 characters after sanitising. Required when there is no usable location.",
                     "type": "string"
-                  },
-                  "name": {
-                    "description": "Up to 100 characters after sanitising.",
-                    "type": "string"
-                  },
-                  "details": {
-                    "description": "Up to 1000 characters after sanitising.",
-                    "type": "string"
                   }
                 }
               }
@@ -647,21 +626,11 @@
             "name": "idempotency-key",
             "required": true,
             "description": "UUID. One per SOS, reused on every retry of it."
-          },
-          {
-            "schema": {
-              "maxLength": 16384,
-              "type": "string"
-            },
-            "in": "header",
-            "name": "x-attestation",
-            "required": false,
-            "description": "Fresh per attempt. See docs/attestation-contract.md."
           }
         ],
         "security": [
           {
-            "deviceToken": []
+            "accessToken": []
           }
         ],
         "responses": {
@@ -674,7 +643,6 @@
                   "type": "object",
                   "required": [
                     "receiptId",
-                    "statusToken",
                     "reference",
                     "status",
                     "submittedAt"
@@ -682,10 +650,6 @@
                   "properties": {
                     "receiptId": {
                       "description": "`sos_` + ULID.",
-                      "type": "string"
-                    },
-                    "statusToken": {
-                      "description": "Send as `X-Status-Token` to the status endpoint.",
                       "type": "string"
                     },
                     "reference": {
@@ -744,7 +708,6 @@
                   "type": "object",
                   "required": [
                     "receiptId",
-                    "statusToken",
                     "reference",
                     "status",
                     "submittedAt"
@@ -752,10 +715,6 @@
                   "properties": {
                     "receiptId": {
                       "description": "`sos_` + ULID.",
-                      "type": "string"
-                    },
-                    "statusToken": {
-                      "description": "Send as `X-Status-Token` to the status endpoint.",
                       "type": "string"
                     },
                     "reference": {
@@ -841,11 +800,11 @@
             }
           },
           "401": {
-            "description": "Device token missing, invalid or expired. Re-register, then retry with the same key.",
+            "description": "The access token is missing or not valid (`invalid_token`), has expired (`token_expired`: refresh, then retry with the same key), or its session has ended (`session_revoked`: sign in again).",
             "content": {
               "application/json": {
                 "schema": {
-                  "description": "Device token missing, invalid or expired. Re-register, then retry with the same key.",
+                  "description": "The access token is missing or not valid (`invalid_token`), has expired (`token_expired`: refresh, then retry with the same key), or its session has ended (`session_revoked`: sign in again).",
                   "type": "object",
                   "required": [
                     "error"
@@ -946,16 +905,15 @@
             }
           },
           "409": {
-            "description": "An SOS from this device is already open; its receipt and status token are returned.",
+            "description": "An SOS from this account is already open; its receipt is returned.",
             "content": {
               "application/json": {
                 "schema": {
-                  "description": "An SOS from this device is already open; its receipt and status token are returned.",
+                  "description": "An SOS from this account is already open; its receipt is returned.",
                   "type": "object",
                   "required": [
                     "error",
                     "receiptId",
-                    "statusToken",
                     "reference",
                     "status",
                     "submittedAt"
@@ -982,10 +940,6 @@
                     },
                     "receiptId": {
                       "description": "`sos_` + ULID.",
-                      "type": "string"
-                    },
-                    "statusToken": {
-                      "description": "Send as `X-Status-Token` to the status endpoint.",
                       "type": "string"
                     },
                     "reference": {
@@ -1146,7 +1100,7 @@
     "/v1/sos/{receiptId}/status": {
       "get": {
         "operationId": "getSosStatus",
-        "summary": "Status of one SOS. Needs the X-Status-Token returned when the SOS was accepted.",
+        "summary": "Status of one of the signed-in user's SOS.",
         "parameters": [
           {
             "schema": {
@@ -1155,15 +1109,11 @@
             "in": "path",
             "name": "receiptId",
             "required": true
-          },
+          }
+        ],
+        "security": [
           {
-            "schema": {
-              "type": "string"
-            },
-            "in": "header",
-            "name": "x-status-token",
-            "required": false,
-            "description": "The status token returned with the receipt."
+            "accessToken": []
           }
         ],
         "responses": {
@@ -1222,6 +1172,40 @@
                       "format": "date-time",
                       "description": "Time of the last status change.",
                       "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
                     }
                   }
                 }

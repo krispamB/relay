@@ -39,7 +39,7 @@ export interface AttemptOptions {
    * The inline attempt of `POST /v1/sos` (PRD §8.1). When delivery is paused before the attempt, or
    * Core answers 401/403 to it, the caller is about to be told 503 ("not sent, call instead"), so the
    * submission is marked `failed` rather than left queued: it must not reach dispatch later when an
-   * operator resumes, nor hold the device's one open SOS. Without this flag (the worker) such a
+   * operator resumes, nor hold the user's one open SOS. Without this flag (the worker) such a
    * submission stays queued, as before.
    */
   inline?: boolean;
@@ -224,7 +224,14 @@ export async function attemptDelivery(
       return { kind: 'not_sent_paused', row };
     }
 
-    const input = buildSaveCallInput(row, ctx.config.resgrid, {
+    // ContactName is the account's name (docs/live-sos-plan.md §3.2). The user row cannot be gone:
+    // deleting a user deletes their submissions.
+    const user = await trx
+      .selectFrom('users')
+      .select('full_name')
+      .where('id', '=', row.user_id)
+      .executeTakeFirst();
+    const input = buildSaveCallInput({ ...row, contact_name: user?.full_name ?? null }, ctx.config.resgrid, {
       requiredAddress: state.required_address,
       requiredName: state.required_name,
     });

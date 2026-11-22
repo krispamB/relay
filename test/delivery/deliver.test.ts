@@ -297,26 +297,24 @@ describe('attemptDelivery outcomes (PRD §8.1)', () => {
 });
 
 describe('field-policy placeholders through delivery', () => {
-  it('sends the placeholders when relay_state says the policy requires address and name', async () => {
+  it("sends the address placeholder when the policy requires it, and the account's name, never the name placeholder", async () => {
     const { ctx, core } = setup();
     await ctx.db
       .updateTable('relay_state')
       .set({ required_address: true, required_name: true })
       .where('id', '=', 1)
       .execute();
-    const id = await insertSubmission(ctx.db, ctx.clock.now(), { name: null, address: null });
+    const id = await insertSubmission(ctx.db, ctx.clock.now(), { address: null });
     await attemptDelivery(ctx, id);
-    expect(core.calls[0]!.input).toMatchObject({
-      Address: PLACEHOLDER_ADDRESS,
-      ContactName: PLACEHOLDER_NAME,
-    });
+    expect(core.calls[0]!.input).toMatchObject({ Address: PLACEHOLDER_ADDRESS, ContactName: 'Ade' });
+    expect(core.calls[0]!.input.ContactName).not.toBe(PLACEHOLDER_NAME);
   });
-  it('sends neither placeholder when the policy does not require them', async () => {
+  it('sends no address placeholder when the policy does not require one', async () => {
     const { ctx, core } = setup();
-    const id = await insertSubmission(ctx.db, ctx.clock.now(), { name: null, address: null });
+    const id = await insertSubmission(ctx.db, ctx.clock.now(), { address: null });
     await attemptDelivery(ctx, id);
     expect(core.calls[0]!.input).not.toHaveProperty('Address');
-    expect(core.calls[0]!.input).not.toHaveProperty('ContactName');
+    expect(core.calls[0]!.input).toMatchObject({ ContactName: 'Ade', ContactInfo: '+2348012345678' });
   });
 });
 

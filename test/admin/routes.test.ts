@@ -193,9 +193,7 @@ describe('submissions view', () => {
       status: 'received',
       reference: 'SOS-K7M2',
       phone: '+2348099998888',
-      name: 'Zainab Okonkwo',
       address: '12 Marigold Crescent',
-      details: 'smoke from the basement',
       ip: '198.51.100.77',
       lat: 6.123456,
       lon: 3.654321,
@@ -223,15 +221,7 @@ describe('submissions view', () => {
       receiptId: id,
     });
     expect(body.events).toHaveLength(1);
-    for (const secret of [
-      '8099998888',
-      'Zainab',
-      'Marigold',
-      'smoke',
-      '198.51.100.77',
-      '6.123456',
-      '3.654321',
-    ]) {
+    for (const secret of ['8099998888', 'Marigold', '198.51.100.77', '6.123456', '3.654321']) {
       expect(res.body).not.toContain(secret);
     }
   });
@@ -272,12 +262,12 @@ describe('submissions view', () => {
 });
 
 describe('blocks', () => {
-  it('blocks a device id, default duration from config', async () => {
+  it('blocks a user id, default duration from config', async () => {
     const { ctx, call } = await setup();
-    const res = await call('POST', '/admin/v1/blocks', { deviceId: 'dev_abc', reason: 'abuse' });
+    const res = await call('POST', '/admin/v1/blocks', { userId: 'usr_abc', reason: 'abuse' });
     expect(res.statusCode).toBe(201);
     const b = res.json();
-    expect(b).toMatchObject({ subjectType: 'device', subject: 'dev_abc', source: 'manual', reason: 'abuse' });
+    expect(b).toMatchObject({ subjectType: 'user', subject: 'usr_abc', source: 'manual', reason: 'abuse' });
     expect(new Date(b.expiresAt).getTime() - ctx.clock.now().getTime()).toBe(
       ctx.config.limits.blockTtlDays * DAY,
     );
@@ -304,19 +294,21 @@ describe('blocks', () => {
     expect((await call('POST', '/admin/v1/blocks', { phone: '12345', reason: 'x' })).statusCode).toBe(400);
     expect((await call('POST', '/admin/v1/blocks', { reason: 'x' })).statusCode).toBe(400);
     expect(
-      (await call('POST', '/admin/v1/blocks', { phone: PHONE, deviceId: 'd', reason: 'x' })).statusCode,
+      (await call('POST', '/admin/v1/blocks', { phone: PHONE, userId: 'u', reason: 'x' })).statusCode,
     ).toBe(400);
+    // The device subject is gone with the device model.
+    expect((await call('POST', '/admin/v1/blocks', { deviceId: 'dev_1', reason: 'x' })).statusCode).toBe(400);
   });
 
   it('lists live blocks only, and deletes', async () => {
     const { ctx, call } = await setup();
-    const live = (await call('POST', '/admin/v1/blocks', { deviceId: 'dev_live', reason: 'a' })).json();
+    const live = (await call('POST', '/admin/v1/blocks', { userId: 'usr_live', reason: 'a' })).json();
     await ctx.db
       .insertInto('blocks')
       .values({
         id: 'blk_old',
-        subject_type: 'device',
-        subject: 'dev_old',
+        subject_type: 'user',
+        subject: 'usr_old',
         reason: 'old',
         source: 'automatic',
         created_at: new Date(ctx.clock.now().getTime() - 2 * DAY),
@@ -327,8 +319,8 @@ describe('blocks', () => {
       .insertInto('blocks')
       .values({
         id: 'blk_forever',
-        subject_type: 'device',
-        subject: 'dev_f',
+        subject_type: 'user',
+        subject: 'usr_f',
         reason: 'f',
         source: 'manual',
         created_at: ctx.clock.now(),

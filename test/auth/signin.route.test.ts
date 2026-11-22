@@ -39,7 +39,7 @@ async function setup(log?: Logger) {
     ...(log ? { log } : {}),
     config: {
       ...base,
-      auth: { enabled: true, tokenSecret: AUTH_SECRET },
+      auth: { tokenSecret: AUTH_SECRET },
       limits: { ...base.limits, requestsPerIpPerMinute: 10_000 },
     },
   });
@@ -551,7 +551,7 @@ describe('review fixes', () => {
     const base = testConfig();
     const ctx = createTestContext({
       db: testDb().withPlugin(deleteAfterLookup),
-      config: { ...base, auth: { enabled: true, tokenSecret: AUTH_SECRET } },
+      config: { ...base, auth: { tokenSecret: AUTH_SECRET } },
     });
     const app = await buildPublicApp(ctx);
     open.push(app);

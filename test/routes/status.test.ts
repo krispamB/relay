@@ -1,11 +1,12 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildPublicApp } from '../../src/app.js';
-import { statusTokenFor } from '../../src/crypto.js';
+import { MINUTE } from '../../src/clock.js';
 import type { SubmissionStatus } from '../../src/db/types.js';
 import { newReceiptId } from '../../src/ids.js';
 import { METRICS, type Metrics } from '../../src/metrics.js';
 import { insertSubmission } from '../delivery/fixtures.js';
 import { closeTestDb, createTestContext, resetDb, testConfig, unusedCore } from '../helpers/context.js';
+import { seedUser } from '../helpers/seed.js';
 
 beforeEach(() => resetDb());
 afterAll(() => closeTestDb());
@@ -29,19 +30,22 @@ async function setup(limit?: number) {
       limit === undefined ? base : { ...base, limits: { ...base.limits, statusPollMinIntervalS: limit } },
   });
   const app = await buildPublicApp(ctx);
-  const tokenFor = (id: string) => statusTokenFor(ctx.config.statusTokenSecret, id);
-  const poll = (id: string, token: string | null = tokenFor(id)) =>
+  const owner = await seedUser(ctx);
+  const stranger = await seedUser(ctx);
+  /** Polls as the owner unless another token (or none) is given. */
+  const poll = (id: string, token: string | null = owner.token()) =>
     app.inject({
       method: 'GET',
       url: `/v1/sos/${id}/status`,
-      headers: token === null ? {} : { 'x-status-token': token },
+      headers: token === null ? {} : { authorization: `Bearer ${token}` },
     });
+  /** A submission of the owner's. */
   const submit = async (status: SubmissionStatus = 'queued') => {
     const id = newReceiptId(ctx.clock.now().getTime());
-    await insertSubmission(ctx.db, ctx.clock.now(), { id, status });
+    await insertSubmission(ctx.db, ctx.clock.now(), { id, status, user_id: owner.user.id });
     return id;
   };
-  return { ctx, app, metrics, tokenFor, poll, submit };
+  return { ctx, app, metrics, owner, stranger, poll, submit };
 }
 
 describe('GET /v1/sos/:receiptId/status', () => {
@@ -71,7 +75,7 @@ describe('GET /v1/sos/:receiptId/status', () => {
     const { poll, submit } = await setup();
     const id = await submit('dispatched');
     expect((await poll(id)).statusCode).toBe(200);
-    expect((await poll('sos_bogus', 'x')).statusCode).toBe(404);
+    expect((await poll('sos_bogus')).statusCode).toBe(404);
   });
 
   it('updatedAt follows the latest event, falling back to accepted_at', async () => {
@@ -92,16 +96,15 @@ describe('GET /v1/sos/:receiptId/status', () => {
     expect((await poll(id)).json().updatedAt).toBe(t2.toISOString());
   });
 
-  it('wrong token, missing token, malformed id and unknown receipt give identical 404 bodies', async () => {
-    const { poll, submit, tokenFor } = await setup();
+  it("someone else's receipt, a malformed id and an unknown receipt give identical 404 bodies", async () => {
+    const { poll, submit, stranger } = await setup();
     const id = await submit();
     const unknown = newReceiptId(Date.now());
     const results = await Promise.all([
-      poll(id, 'wrong-token'),
-      poll(id, null),
-      poll('not-a-receipt', tokenFor('not-a-receipt')),
-      poll(unknown, tokenFor(unknown)),
-      poll(unknown, 'wrong-token'),
+      poll(id, stranger.token()),
+      poll('not-a-receipt'),
+      poll(unknown),
+      poll(unknown, stranger.token()),
     ]);
     for (const r of results) expect(r.statusCode).toBe(404);
     const bodies = new Set(results.map((r) => r.body));
@@ -109,11 +112,29 @@ describe('GET /v1/sos/:receiptId/status', () => {
     expect(results[0]!.json()).toEqual({ error: { code: 'not_found', message: 'Not found.' } });
   });
 
-  it('a token for another receipt is refused', async () => {
-    const { poll, submit, tokenFor } = await setup();
-    const a = await submit();
-    const b = await submit();
-    expect((await poll(a, tokenFor(b))).statusCode).toBe(404);
+  it('401 with the auth codes for a missing, malformed, expired or revoked access token', async () => {
+    const { ctx, poll, submit, owner } = await setup(0);
+    const id = await submit();
+    const missing = await poll(id, null);
+    const garbage = await poll(id, 'not-a-token');
+    const old = owner.token();
+    ctx.clock.advance(15 * MINUTE);
+    const expired = await poll(id, old);
+    await ctx.db
+      .updateTable('token_families')
+      .set({ revoked_at: ctx.clock.now() })
+      .where('id', '=', owner.familyId)
+      .execute();
+    const revoked = await poll(id);
+    for (const [res, code] of [
+      [missing, 'invalid_token'],
+      [garbage, 'invalid_token'],
+      [expired, 'token_expired'],
+      [revoked, 'session_revoked'],
+    ] as const) {
+      expect(res.statusCode).toBe(401);
+      expect(res.json()).toEqual({ error: { code, message: expect.any(String) } });
+    }
   });
 
   describe('poll limit', () => {
@@ -133,16 +154,17 @@ describe('GET /v1/sos/:receiptId/status', () => {
 
     it('is per receipt', async () => {
       const { poll, submit } = await setup(5);
-      const a = await submit();
+      // One user has one open SOS at a time: the first is closed.
+      const a = await submit('closed');
       const b = await submit();
       expect((await poll(a)).statusCode).toBe(200);
       expect((await poll(b)).statusCode).toBe(200);
     });
 
-    it('wrong-token requests do not consume the limit', async () => {
-      const { poll, submit } = await setup(5);
+    it("requests from someone else do not consume the owner's limit", async () => {
+      const { poll, submit, stranger } = await setup(5);
       const id = await submit();
-      for (let i = 0; i < 5; i++) expect((await poll(id, 'wrong')).statusCode).toBe(404);
+      for (let i = 0; i < 5; i++) expect((await poll(id, stranger.token())).statusCode).toBe(404);
       expect((await poll(id)).statusCode).toBe(200);
     });
 
@@ -156,9 +178,9 @@ describe('GET /v1/sos/:receiptId/status', () => {
   it('documents both routes in the OpenAPI document', async () => {
     const { app } = await setup();
     const doc = (await app.inject({ method: 'GET', url: '/v1/openapi.json' })).json();
-    expect(doc.paths['/v1/sos/{receiptId}/status'].get.parameters).toEqual(
-      expect.arrayContaining([expect.objectContaining({ name: 'x-status-token', in: 'header' })]),
-    );
+    const op = doc.paths['/v1/sos/{receiptId}/status'].get;
+    expect(op.security).toEqual([{ accessToken: [] }]);
+    expect(JSON.stringify(op.parameters)).not.toContain('x-status-token');
     expect(doc.paths['/v1/intake/{intakeCode}'].get.responses['200']).toBeDefined();
   });
 });

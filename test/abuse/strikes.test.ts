@@ -11,7 +11,7 @@ import {
   runStatusPollerPass,
 } from '../../src/jobs/statusPoller.js';
 import { closeTestDb, resetDb, testConfig } from '../helpers/context.js';
-import { deliverToMock, insertDevice, mockContext, strikesFor } from '../jobs/fixtures.js';
+import { deliverToMock, insertUser, mockContext, strikesFor } from '../jobs/fixtures.js';
 
 let mock: RunningMockCore;
 
@@ -37,10 +37,10 @@ type Ctx = ReturnType<typeof ctxWith>;
 async function closedAs(
   ctx: Ctx,
   state: number,
-  opts: { deviceId?: string; phoneHash?: string } = {},
-): Promise<{ id: string; callId: string; deviceId: string; reference: string }> {
+  opts: { userId?: string; phoneHash?: string } = {},
+): Promise<{ id: string; callId: string; userId: string; reference: string }> {
   const s = await deliverToMock(ctx, {
-    ...(opts.deviceId ? { deviceId: opts.deviceId } : {}),
+    ...(opts.userId ? { userId: opts.userId } : {}),
     overrides: opts.phoneHash ? { phone_hash: opts.phoneHash } : {},
   });
   mock.control.setCallState(s.callId, state);
@@ -63,7 +63,7 @@ describe('hoax strikes (PRD §9.2)', () => {
     }
     const strikes = await strikesFor(ctx.db);
     expect(strikes.map((x) => [x.subject_type, x.subject, x.submission_id])).toEqual([
-      ['device', s.deviceId, s.id],
+      ['user', s.userId, s.id],
       ['phone', 'phone-hash-a', s.id],
     ]);
     expect(strikes[0]!.expires_at.getTime() - strikes[0]!.created_at.getTime()).toBe(30 * DAY);
@@ -97,26 +97,26 @@ describe('hoax strikes (PRD §9.2)', () => {
     expect(await strikesFor(ctx.db)).toEqual([]);
   });
 
-  it('blocks the device automatically at the threshold, with a warning naming the device only', async () => {
+  it('blocks the user automatically at the threshold, with a warning naming the user only', async () => {
     const ctx = ctxWith();
-    const deviceId = await insertDevice(ctx.db, ctx.clock.now());
-    await closedAs(ctx, 3, { deviceId, phoneHash: 'phone-hash-1' });
+    const userId = await insertUser(ctx.db, ctx.clock.now());
+    await closedAs(ctx, 3, { userId, phoneHash: 'phone-hash-1' });
     expect(await blocks(ctx)).toEqual([]);
-    expect(await isBlocked(ctx.db, 'device', deviceId, ctx.clock.now())).toBe(false);
+    expect(await isBlocked(ctx.db, 'user', userId, ctx.clock.now())).toBe(false);
 
-    const second = await closedAs(ctx, 7, { deviceId, phoneHash: 'phone-hash-2' });
+    const second = await closedAs(ctx, 7, { userId, phoneHash: 'phone-hash-2' });
     const all = await blocks(ctx);
     expect(all).toHaveLength(1);
-    expect(all[0]).toMatchObject({ subject_type: 'device', subject: deviceId, source: 'automatic' });
+    expect(all[0]).toMatchObject({ subject_type: 'user', subject: userId, source: 'automatic' });
     expect(all[0]!.expires_at!.getTime() - all[0]!.created_at.getTime()).toBe(30 * DAY);
-    expect(await isBlocked(ctx.db, 'device', deviceId, ctx.clock.now())).toBe(true);
+    expect(await isBlocked(ctx.db, 'user', userId, ctx.clock.now())).toBe(true);
 
     const alerts = ctx.alerts.alerts.filter((a) => a.code === ALERT_CODES.automaticBlock);
     expect(alerts).toEqual([
       expect.objectContaining({ severity: 'warning', reference: second.reference, receiptId: second.id }),
     ]);
-    expect(alerts[0]!.message).toContain(deviceId);
-    expect(alerts[0]!.message).toContain('device');
+    expect(alerts[0]!.message).toContain(userId);
+    expect(alerts[0]!.message).toContain('user');
     const text = JSON.stringify(ctx.alerts.alerts);
     for (const secret of ['+2348012345678', 'phone-hash-1', 'phone-hash-2'])
       expect(text).not.toContain(secret);
@@ -129,8 +129,8 @@ describe('hoax strikes (PRD §9.2)', () => {
     const b = await closedAs(ctx, 3, { phoneHash: 'phone-hash-x' });
     expect(await liveStrikeCount(ctx.db, 'phone', 'phone-hash-x', ctx.clock.now())).toBe(2);
     expect(await isBlocked(ctx.db, 'phone', 'phone-hash-x', ctx.clock.now())).toBe(false);
-    expect(await isBlocked(ctx.db, 'device', a.deviceId, ctx.clock.now())).toBe(false);
-    expect(await isBlocked(ctx.db, 'device', b.deviceId, ctx.clock.now())).toBe(false);
+    expect(await isBlocked(ctx.db, 'user', a.userId, ctx.clock.now())).toBe(false);
+    expect(await isBlocked(ctx.db, 'user', b.userId, ctx.clock.now())).toBe(false);
     expect(await blocks(ctx)).toEqual([]);
     expect(ctx.alerts.codes()).not.toContain(ALERT_CODES.automaticBlock);
 
@@ -189,15 +189,15 @@ describe('hoax strikes (PRD §9.2)', () => {
 
   it('does not add a second block while one is live', async () => {
     const ctx = ctxWith();
-    const deviceId = await insertDevice(ctx.db, ctx.clock.now());
-    for (let i = 0; i < 3; i++) await closedAs(ctx, 3, { deviceId, phoneHash: `p${i}` });
-    expect((await blocks(ctx)).filter((b) => b.subject_type === 'device')).toHaveLength(1);
+    const userId = await insertUser(ctx.db, ctx.clock.now());
+    for (let i = 0; i < 3; i++) await closedAs(ctx, 3, { userId, phoneHash: `p${i}` });
+    expect((await blocks(ctx)).filter((b) => b.subject_type === 'user')).toHaveLength(1);
   });
 
   it('with HOAX_STRIKES_TO_BLOCK=0 strikes are recorded but nothing is blocked or reported', async () => {
     const ctx = ctxWith({ hoaxStrikesToBlock: 0 });
-    const deviceId = await insertDevice(ctx.db, ctx.clock.now());
-    for (let i = 0; i < 3; i++) await closedAs(ctx, 7, { deviceId });
+    const userId = await insertUser(ctx.db, ctx.clock.now());
+    for (let i = 0; i < 3; i++) await closedAs(ctx, 7, { userId });
     expect(await strikesFor(ctx.db)).toHaveLength(6);
     expect(await blocks(ctx)).toEqual([]);
     expect(ctx.alerts.codes()).not.toContain(ALERT_CODES.automaticBlock);
@@ -206,33 +206,32 @@ describe('hoax strikes (PRD §9.2)', () => {
 
   it('an expired strike does not count toward the threshold', async () => {
     const ctx = ctxWith({ strikeTtlDays: 30 });
-    const deviceId = await insertDevice(ctx.db, ctx.clock.now());
-    const first = await closedAs(ctx, 3, { deviceId, phoneHash: 'pa' });
+    const userId = await insertUser(ctx.db, ctx.clock.now());
+    const first = await closedAs(ctx, 3, { userId, phoneHash: 'pa' });
     // Let the first submission's status window end so it is no longer open.
     ctx.clock.advance(30 * DAY + SECOND);
     await runStatusPollerPass(ctx);
-    expect(await liveStrikeCount(ctx.db, 'device', deviceId, ctx.clock.now())).toBe(0);
-    await closedAs(ctx, 3, { deviceId, phoneHash: 'pb' });
-    expect(await liveStrikeCount(ctx.db, 'device', deviceId, ctx.clock.now())).toBe(1);
+    expect(await liveStrikeCount(ctx.db, 'user', userId, ctx.clock.now())).toBe(0);
+    await closedAs(ctx, 3, { userId, phoneHash: 'pb' });
+    expect(await liveStrikeCount(ctx.db, 'user', userId, ctx.clock.now())).toBe(1);
     expect(await blocks(ctx)).toEqual([]);
     expect(first.id).toBeDefined();
   });
 
   it('creates no strike for a demo submission (it never reaches the poller’s Core path)', async () => {
     const ctx = ctxWith();
-    const deviceId = await insertDevice(ctx.db, ctx.clock.now());
+    const userId = await insertUser(ctx.db, ctx.clock.now());
     await ctx.db
       .insertInto('submissions')
       .values({
         id: 'sos_DEMO1',
-        device_id: deviceId,
+        user_id: userId,
         idempotency_key: 'demo-key',
         intake_code: 'DEMO-DEPT',
         is_demo: true,
         reference: 'SOS-DEMO',
         status: 'received',
-        nature_id: 'medical',
-        nature_label: 'Medical emergency',
+        nature_label: 'SOS – caller recording to follow',
         phone: '+2348012345678',
         phone_hash: 'ph-demo',
         ip: '203.0.113.1',
@@ -253,30 +252,30 @@ describe('hoax strikes (PRD §9.2)', () => {
 });
 
 describe('lifting automatic blocks when a hoax closure is reversed', () => {
-  it('lifts the automatic device block the strike caused, and warns', async () => {
+  it('lifts the automatic user block the strike caused, and warns', async () => {
     const ctx = ctxWith();
-    const deviceId = await insertDevice(ctx.db, ctx.clock.now());
-    await closedAs(ctx, 3, { deviceId });
-    const second = await closedAs(ctx, 3, { deviceId });
-    expect(await isBlocked(ctx.db, 'device', deviceId, ctx.clock.now())).toBe(true);
+    const userId = await insertUser(ctx.db, ctx.clock.now());
+    await closedAs(ctx, 3, { userId });
+    const second = await closedAs(ctx, 3, { userId });
+    expect(await isBlocked(ctx.db, 'user', userId, ctx.clock.now())).toBe(true);
     expect(await isBlocked(ctx.db, 'phone', 'phone-hash-a', ctx.clock.now())).toBe(false);
     ctx.alerts.clear();
 
     mock.control.setCallState(second.callId, 0);
     ctx.clock.advance(CLOSED_INTERVAL_MS);
     await runStatusPollerPass(ctx);
-    expect(await isBlocked(ctx.db, 'device', deviceId, ctx.clock.now())).toBe(false);
+    expect(await isBlocked(ctx.db, 'user', userId, ctx.clock.now())).toBe(false);
     expect(await liveStrikeCount(ctx.db, 'phone', 'phone-hash-a', ctx.clock.now())).toBe(1);
     const lifted = ctx.alerts.alerts.filter((a) => a.code === ALERT_CODES.automaticBlock);
     expect(lifted).toHaveLength(1);
-    expect(lifted[0]!.message).toContain(deviceId);
+    expect(lifted[0]!.message).toContain(userId);
     expect(JSON.stringify(ctx.alerts.alerts)).not.toContain('phone-hash-a');
   });
 
   it('never lifts a manual block, nor a block that still has enough strikes behind it', async () => {
     const ctx = ctxWith();
     const now = ctx.clock.now();
-    const sub = { id: 'sos_X1', reference: 'SOS-X1', device_id: 'dev_X', phone_hash: 'ph_X' };
+    const sub = { id: 'sos_X1', reference: 'SOS-X1', user_id: 'usr_X', phone_hash: 'ph_X' };
     const limits = { hoaxStrikesToBlock: 2, strikeTtlDays: 30, blockTtlDays: 30 };
     await ctx.db
       .insertInto('blocks')
@@ -293,28 +292,28 @@ describe('lifting automatic blocks when a hoax closure is reversed', () => {
     await recordHoaxStrikes(ctx.db, sub, now, limits);
     await recordHoaxStrikes(ctx.db, { ...sub, id: 'sos_X2' }, now, limits);
     await recordHoaxStrikes(ctx.db, { ...sub, id: 'sos_X3' }, now, limits);
-    expect(await isBlocked(ctx.db, 'device', 'dev_X', now)).toBe(true);
+    expect(await isBlocked(ctx.db, 'user', 'usr_X', now)).toBe(true);
 
-    // Three strikes, one removed: two remain, so the device block stands.
+    // Three strikes, one removed: two remain, so the user block stands.
     const lifted = await removeStrikes(ctx.db, { ...sub, id: 'sos_X3' }, now, limits);
     expect(lifted).toEqual([]);
-    expect(await isBlocked(ctx.db, 'device', 'dev_X', now)).toBe(true);
+    expect(await isBlocked(ctx.db, 'user', 'usr_X', now)).toBe(true);
 
-    // Below the threshold now: the automatic device block goes, the manual phone block stays.
+    // Below the threshold now: the automatic user block goes, the manual phone block stays.
     const lifted2 = await removeStrikes(ctx.db, { ...sub, id: 'sos_X2' }, now, limits);
-    expect(lifted2.map((c) => c.kind)).toEqual(['device_block_lifted']);
-    expect(await isBlocked(ctx.db, 'device', 'dev_X', now)).toBe(false);
+    expect(lifted2.map((c) => c.kind)).toEqual(['user_block_lifted']);
+    expect(await isBlocked(ctx.db, 'user', 'usr_X', now)).toBe(false);
     expect(await isBlocked(ctx.db, 'phone', 'ph_X', now)).toBe(true);
   });
 
   it('recording a strike twice for one submission is a no-op', async () => {
     const ctx = ctxWith();
     const now = ctx.clock.now();
-    const sub = { id: 'sos_Y1', reference: 'SOS-Y1', device_id: 'dev_Y', phone_hash: 'ph_Y' };
+    const sub = { id: 'sos_Y1', reference: 'SOS-Y1', user_id: 'usr_Y', phone_hash: 'ph_Y' };
     const limits = { hoaxStrikesToBlock: 1, strikeTtlDays: 30, blockTtlDays: 30 };
     const first = await recordHoaxStrikes(ctx.db, sub, now, limits);
     const again = await recordHoaxStrikes(ctx.db, sub, now, limits);
-    expect(first.map((o) => o.kind)).toEqual(['device_block_applied', 'phone_threshold_reached']);
+    expect(first.map((o) => o.kind)).toEqual(['user_block_applied', 'phone_threshold_reached']);
     expect(again).toEqual([]);
     expect(await strikesFor(ctx.db)).toHaveLength(2);
   });

@@ -3,7 +3,7 @@ import { inject } from 'vitest';
 import { RecordingAlerter } from '../../src/alerts.js';
 import type { AttestationService } from '../../src/attestation/types.js';
 import { FakeClock } from '../../src/clock.js';
-import { type Config, DEFAULT_LIMITS } from '../../src/config.js';
+import { type Config, DEFAULT_LIMITS, DEFAULT_SOS_NATURE_TEXT } from '../../src/config.js';
 import type { AppContext } from '../../src/context.js';
 import type { CoreClient } from '../../src/core/types.js';
 import { createDb, type Db } from '../../src/db/index.js';
@@ -66,11 +66,8 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     statusTokenSecret: 'status-token-secret-for-tests-0123456789',
     phoneHashSecret: 'phone-hash-secret-for-tests-01234567890',
     adminToken: 'admin-token-for-tests-0123456789abcdef',
-    // TEST_AUTH_ENABLED=true runs the whole suite with the auth plugin mounted (README, "Local development").
-    auth: {
-      enabled: process.env.TEST_AUTH_ENABLED === 'true',
-      tokenSecret: 'auth-token-secret-for-tests-0123456789ab',
-    },
+    auth: { tokenSecret: 'auth-token-secret-for-tests-0123456789ab' },
+    sosNatureText: DEFAULT_SOS_NATURE_TEXT,
     alertWebhookUrl: undefined,
     demoDispatchAfterS: 30,
     demoCloseAfterS: 90,
@@ -124,7 +121,7 @@ export async function closeTestDb(): Promise<void> {
 
 /** Empties every table and restores the single relay_state row. Call in beforeEach. */
 export async function resetDb(db: Db = testDb()): Promise<void> {
-  await sql`TRUNCATE signin_attempts, signup_phone_attempts, signup_idempotency, refresh_tokens, token_families, users, submission_events, submissions, device_registrations, devices, nonces, strikes, blocks, alert_log, relay_state RESTART IDENTITY CASCADE`.execute(
+  await sql`TRUNCATE submission_units, recordings, signin_attempts, signup_phone_attempts, signup_idempotency, refresh_tokens, token_families, users, submission_events, submissions, device_registrations, devices, nonces, strikes, blocks, alert_log, relay_state RESTART IDENTITY CASCADE`.execute(
     db,
   );
   await sql`INSERT INTO relay_state (id) VALUES (1)`.execute(db);

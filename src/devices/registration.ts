@@ -7,7 +7,6 @@
  */
 import type { FastifyBaseLogger } from 'fastify';
 import { sql } from 'kysely';
-import { isBlocked } from '../abuse/blocks.js';
 import type { RegistrationInput } from '../attestation/types.js';
 import { addMs, DAY, HOUR } from '../clock.js';
 import type { AppContext } from '../context.js';
@@ -113,8 +112,6 @@ export async function registerDevice(
         deviceId: existing.id,
         devicePlatform: existing.platform,
       });
-    } else if (await isBlocked(ctx.db, 'device', existing.id, now)) {
-      throw refused('device_blocked', { deviceId: existing.id });
     } else {
       renewing = existing;
     }

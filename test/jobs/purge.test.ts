@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { DAY, HOUR, SECOND } from '../../src/clock.js';
 import { createPurgeJob, PURGE_BATCH, runPurgePass } from '../../src/jobs/purge.js';
 import { closeTestDb, createTestContext, resetDb } from '../helpers/context.js';
-import { insertDevice, insertSubmissionOn } from './fixtures.js';
+import { insertDevice, insertSubmissionOn, insertUser } from './fixtures.js';
 
 beforeEach(() => resetDb());
 afterAll(() => closeTestDb());
@@ -24,9 +24,9 @@ describe('purge job (PRD §10.5)', () => {
   it('deletes submissions 30 days after acceptance, with their events, and not a day early', async () => {
     const ctx = createTestContext();
     const now = ctx.clock.now();
-    const dev = await insertDevice(ctx.db, now, { tokenExpiresAt: ahead(now, 30 * DAY) });
-    const old = await insertSubmissionOn(ctx.db, dev, ago(now, 30 * DAY + SECOND), { status: 'closed' });
-    const young = await insertSubmissionOn(ctx.db, dev, ago(now, 29 * DAY), { status: 'closed' });
+    const user = await insertUser(ctx.db, now);
+    const old = await insertSubmissionOn(ctx.db, user, ago(now, 30 * DAY + SECOND), { status: 'closed' });
+    const young = await insertSubmissionOn(ctx.db, user, ago(now, 29 * DAY), { status: 'closed' });
     await ctx.db
       .insertInto('submission_events')
       .values(
@@ -47,13 +47,11 @@ describe('purge job (PRD §10.5)', () => {
     expect(events.map((e) => e.submission_id)).toEqual([young]);
   });
 
-  it('deletes devices whose token expired over 30 days ago and that have no submissions left', async () => {
+  it('deletes devices whose token expired over 30 days ago', async () => {
     const ctx = createTestContext();
     const now = ctx.clock.now();
     const gone = await insertDevice(ctx.db, now, { tokenExpiresAt: ago(now, 30 * DAY + SECOND) });
     const recentExpiry = await insertDevice(ctx.db, now, { tokenExpiresAt: ago(now, 29 * DAY) });
-    const withSubmission = await insertDevice(ctx.db, now, { tokenExpiresAt: ago(now, 40 * DAY) });
-    await insertSubmissionOn(ctx.db, withSubmission, ago(now, 10 * DAY), { status: 'closed' });
     await ctx.db
       .insertInto('device_registrations')
       .values({ device_id: gone, ip_hash: 'iph', created_at: ago(now, 60 * DAY) })
@@ -61,17 +59,18 @@ describe('purge job (PRD §10.5)', () => {
 
     const counts = await runPurgePass(ctx);
     expect(counts.devices).toBe(1);
-    expect(await ids(ctx, 'devices')).toEqual([recentExpiry, withSubmission].sort());
+    expect(await ids(ctx, 'devices')).toEqual([recentExpiry]);
     expect(await ctx.db.selectFrom('device_registrations').selectAll().execute()).toEqual([]);
   });
 
-  it('a device whose last submission ages out goes in the same pass', async () => {
+  it('keeps users when their submissions age out', async () => {
     const ctx = createTestContext();
     const now = ctx.clock.now();
-    const dev = await insertDevice(ctx.db, now, { tokenExpiresAt: ago(now, 31 * DAY) });
-    await insertSubmissionOn(ctx.db, dev, ago(now, 31 * DAY), { status: 'closed' });
+    const user = await insertUser(ctx.db, now);
+    await insertSubmissionOn(ctx.db, user, ago(now, 31 * DAY), { status: 'closed' });
     await runPurgePass(ctx);
-    expect(await ids(ctx, 'devices')).toEqual([]);
+    expect(await ids(ctx, 'submissions')).toEqual([]);
+    expect((await ctx.db.selectFrom('users').select('id').execute()).map((r) => r.id)).toEqual([user]);
   });
 
   it('deletes expired strikes, blocks and nonces, and keeps live ones', async () => {
@@ -81,15 +80,15 @@ describe('purge job (PRD §10.5)', () => {
       .insertInto('strikes')
       .values([
         {
-          subject_type: 'device',
-          subject: 'd1',
+          subject_type: 'user',
+          subject: 'u1',
           submission_id: 's1',
           created_at: ago(now, 30 * DAY),
           expires_at: now,
         },
         {
-          subject_type: 'device',
-          subject: 'd1',
+          subject_type: 'user',
+          subject: 'u1',
           submission_id: 's2',
           created_at: ago(now, 29 * DAY),
           expires_at: ahead(now, DAY),
@@ -98,8 +97,8 @@ describe('purge job (PRD §10.5)', () => {
       .execute();
     const block = (id: string, expires_at: Date | null, source: 'automatic' | 'manual' = 'automatic') => ({
       id,
-      subject_type: 'device' as const,
-      subject: 'd1',
+      subject_type: 'user' as const,
+      subject: 'u1',
       reason: 'x',
       source,
       created_at: ago(now, 30 * DAY),
@@ -172,10 +171,10 @@ describe('purge job (PRD §10.5)', () => {
     const log = { ...base.log, info: (obj: unknown) => lines.push(obj) } as unknown as typeof base.log;
     const ctx = createTestContext({ log });
     const now = ctx.clock.now();
-    const dev = await insertDevice(ctx.db, now);
-    await insertSubmissionOn(ctx.db, dev, ago(now, 31 * DAY), { status: 'closed' });
+    const user = await insertUser(ctx.db, now);
+    await insertSubmissionOn(ctx.db, user, ago(now, 31 * DAY), { status: 'closed' });
     await runPurgePass(ctx);
     expect(lines).toHaveLength(1);
-    expect(JSON.stringify(lines)).not.toMatch(/sos_|SOS-|\+234|dev_/);
+    expect(JSON.stringify(lines)).not.toMatch(/sos_|SOS-|\+234|usr_/);
   });
 });
