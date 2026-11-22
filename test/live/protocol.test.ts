@@ -14,7 +14,7 @@ function raw(value: unknown): string {
 }
 
 describe('CLOSE', () => {
-  it('uses the socket close codes from the live plan', () => {
+  it('uses the socket close codes from the live plan, plus 4029 for the per-user socket cap', () => {
     expect(CLOSE).toEqual({
       final: 1000,
       restart: 1012,
@@ -22,6 +22,7 @@ describe('CLOSE', () => {
       revoked: 4003,
       notFound: 4004,
       idle: 4008,
+      tooManySockets: 4029,
     });
   });
 });

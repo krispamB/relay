@@ -13,7 +13,7 @@ import {
   rotateRefreshToken,
   SESSION_REVOKED_CHANNEL,
 } from '../../src/auth/sessions.js';
-import { createTestContext, closeTestDb, resetDb, type TestContext } from '../helpers/context.js';
+import { closeTestDb, createTestContext, resetDb, type TestContext } from '../helpers/context.js';
 import { seedUser } from '../helpers/seed.js';
 
 let listener: pg.Client;
@@ -99,7 +99,11 @@ describe('session revocation notifications', () => {
   it('deleting a family, or its user, notifies; other updates do not', async () => {
     const a = await seedUser(ctx);
     const b = await seedUser(ctx);
-    await ctx.db.updateTable('token_families').set({ app_version: '9' }).where('id', '=', a.familyId).execute();
+    await ctx.db
+      .updateTable('token_families')
+      .set({ app_version: '9' })
+      .where('id', '=', a.familyId)
+      .execute();
     await settle();
     expect(received).toEqual([]);
     await ctx.db.deleteFrom('token_families').where('id', '=', a.familyId).execute();

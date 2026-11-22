@@ -10,7 +10,24 @@ export const CLOSE = {
   revoked: 4003,
   notFound: 4004,
   idle: 4008,
+  /** The user already has the maximum number of sockets open on this relay instance. */
+  tooManySockets: 4029,
 } as const;
+
+/**
+ * Codes of the non-fatal `{type:"error", code}` message. The socket stays open after each.
+ * - `bad_message`: not JSON, not text, an unknown `type`, or the wrong fields for the type.
+ * - `not_subscribed`: a `location` before any `subscribe`.
+ * - `invalid_location`: 0,0, out of range, older than 10 minutes, or in the future.
+ * - `rate_limited`: more than the per-socket message budget; the message was not acted on.
+ * - `unavailable`: the relay could not reach its database; send the message again later.
+ */
+export type ServerErrorCode =
+  | 'bad_message'
+  | 'not_subscribed'
+  | 'invalid_location'
+  | 'rate_limited'
+  | 'unavailable';
 
 export type ClientMessage =
   | { type: 'auth'; token: string }
@@ -20,7 +37,8 @@ export type ClientMessage =
 
 type ParsedClientMessage = { ok: true; message: ClientMessage } | { ok: false; code: 'bad_message' };
 
-const MAX_RAW_BYTES = 8 * 1024;
+/** The largest message the relay reads. The socket's own frame limit is the same (a bigger one closes 1009). */
+export const MAX_MESSAGE_BYTES = 8 * 1024;
 const MAX_TOKEN_CHARS = 4096;
 const MAX_RECEIPT_ID_CHARS = 64;
 
@@ -97,7 +115,7 @@ function parseLocation(obj: Record<string, unknown>): ParsedClientMessage {
 }
 
 export function parseClientMessage(raw: string): ParsedClientMessage {
-  if (Buffer.byteLength(raw) > MAX_RAW_BYTES) return bad();
+  if (Buffer.byteLength(raw) > MAX_MESSAGE_BYTES) return bad();
 
   let value: unknown;
   try {
