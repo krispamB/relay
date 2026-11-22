@@ -324,6 +324,11 @@ describe('recording worker', () => {
       });
       expect(metrics.count(METRICS.recordingsDropped, { reason: 'call_closed' })).toBe(1);
       expect(core.calls).toHaveLength(1);
+      // Core's only refusal is a bare 400, so a 400 that is not "closed" (a body Core won't take)
+      // would look the same: the relay still sees the call as open, so it warns instead of staying silent.
+      expect(ctx.alerts.alerts).toMatchObject([
+        { code: ALERT_CODES.recordingDropped, severity: 'warning', reference: s.reference },
+      ]);
     });
 
     it('drops a pending row whose bytes are gone instead of sending nothing', async () => {

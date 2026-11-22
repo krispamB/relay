@@ -478,9 +478,9 @@ export function createCoreClient(cfg: CoreClientConfig, deps: CoreClientDeps): C
           }
           return { kind: 'ok', data: { fileId: String(id) } };
         },
-        { callId: input.callId, bytes: input.data.length },
-        // Core's answer for a call that is not active or pending is not documented. 400 (refused) and
-        // 404 / 410 (call gone) are read as closed; the live checklist prints the real answer.
+        // `size`, not `bytes`: the logger redacts any `bytes` key (audio).
+        { callId: input.callId, size: input.data.length },
+        // 400 ProblemDetails is Core's only declared refusal: the call is not active or pending (CALL_CLOSED_STATUSES).
         (statusCode) => (CALL_CLOSED_STATUSES.has(statusCode) ? { kind: 'call_closed' as const } : undefined),
       );
     },

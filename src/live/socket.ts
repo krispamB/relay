@@ -22,7 +22,7 @@ import { type AuthKeys, deriveAuthKeys } from '../auth/keys.js';
 import { verifyAccess } from '../auth/requireUser.js';
 import { SECOND } from '../clock.js';
 import type { AppContext } from '../context.js';
-import type { SubmissionStatus } from '../db/types.js';
+import { FINAL_STATUSES } from '../db/types.js';
 import { safeError } from '../errors.js';
 import { RECEIPT_ID_PATTERN } from '../ids.js';
 import { locationIsFresh, locationIsSound } from '../sos/validate.js';
@@ -64,7 +64,6 @@ export const DEFAULT_LIVE_OPTIONS: LiveOptions = {
 /** How long shutdown waits for in-flight message handlers and reads before the pool closes. */
 const DRAIN_ON_CLOSE_MS = 2 * SECOND;
 
-const FINAL: readonly SubmissionStatus[] = ['closed', 'failed'];
 const RECEIPT_ID = new RegExp(RECEIPT_ID_PATTERN);
 
 type Offer = 'answer' | 'push' | 'refresh';
@@ -312,7 +311,7 @@ export class LiveSocket {
     }
     this.lastVersion = snapshot.version;
     this.send(snapshot);
-    if (FINAL.includes(snapshot.status)) this.close(CLOSE.final, 'final');
+    if (FINAL_STATUSES.includes(snapshot.status)) this.close(CLOSE.final, 'final');
   }
 
   private dispose(): void {
@@ -400,7 +399,7 @@ export class LiveSocket {
     } catch (err) {
       if (err instanceof AuthError) return this.refuse(err);
       // The database is unreachable. Before auth there is nothing to keep: try again later.
-      if (this.userId === undefined) return this.close(1013, 'try again later');
+      if (this.userId === undefined) return this.close(CLOSE.tryAgain, 'try again later');
       throw err;
     }
     if (this.closed) return;
@@ -453,7 +452,7 @@ export class LiveSocket {
     const snapshot = await readSnapshot(this.ctx.db, receiptId, this.userId!, now);
     if (this.closed) return;
     if (!snapshot) return this.close(CLOSE.notFound, 'not found');
-    if (!FINAL.includes(snapshot.status)) await watchSubmission(this.ctx.db, receiptId, now);
+    if (!FINAL_STATUSES.includes(snapshot.status)) await watchSubmission(this.ctx.db, receiptId, now);
     this.offer(snapshot, 'answer');
   }
 

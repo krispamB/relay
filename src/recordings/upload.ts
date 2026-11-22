@@ -7,7 +7,7 @@
  */
 import { createHash } from 'node:crypto';
 import type { AppContext } from '../context.js';
-import type { RecordingStatus } from '../db/types.js';
+import { isFinalStatus, type RecordingStatus } from '../db/types.js';
 import { newRecordingId } from '../ids.js';
 import { bumpLiveVersion } from '../live/version.js';
 
@@ -63,7 +63,7 @@ export async function storeRecording(
       return { kind: 'replay', recording: { recordingId: same.id, seq: same.seq, status: same.status } };
     }
 
-    if (sub.status === 'closed' || sub.status === 'failed') return { kind: 'sos_closed' };
+    if (isFinalStatus(sub.status)) return { kind: 'sos_closed' };
 
     const held = await trx
       .selectFrom('recordings')

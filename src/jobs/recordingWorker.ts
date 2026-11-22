@@ -16,12 +16,12 @@ import { ALERT_CODES } from '../alerts.js';
 import { addMs, SECOND } from '../clock.js';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/index.js';
-import type { Recording } from '../db/types.js';
+import { isFinalStatus, type Recording } from '../db/types.js';
 import { nextAttemptAt } from '../delivery/backoff.js';
 import { safeError } from '../errors.js';
 import { bumpLiveVersion } from '../live/version.js';
 import { METRICS } from '../metrics.js';
-import { pauseDelivery } from '../state.js';
+import { pauseForAuth } from './coreRead.js';
 import type { Job } from './runner.js';
 
 export const RECORDING_INTERVAL_MS = 1000;
@@ -131,7 +131,7 @@ async function attachOne(ctx: AppContext, recordingId: string): Promise<void> {
     const demo = sub.is_demo;
 
     // The audio can never be attached once the SOS has ended (plan D10).
-    if (sub.status === 'closed' || sub.status === 'failed') {
+    if (isFinalStatus(sub.status)) {
       const reason = sub.status === 'closed' ? 'sos_closed' : 'sos_failed';
       await drop(trx, rec, reason);
       return { kind: 'dropped', ids, demo, reason };
@@ -266,6 +266,17 @@ async function afterCommit(ctx: AppContext, decision: Decision): Promise<void> {
           receiptId: ids.receiptId,
           always: true,
         });
+      } else if (reason === 'call_closed') {
+        // Core's only declared refusal is a bare 400 (integration.md §5.5), so a 400 for any other reason
+        // (a body Core will not take) reads as "closed" too. The relay still saw the call as open when it
+        // sent the file, so say so: a run of these with no dispatcher closing calls means that 400 is wrong.
+        await ctx.alerts.raise({
+          severity: 'warning',
+          code: ALERT_CODES.recordingDropped,
+          message: `Core refused the recording of SOS ${ids.reference} with HTTP 400 (read as "call closed") while the relay still saw the call as open; it was dropped`,
+          reference: ids.reference,
+          receiptId: ids.receiptId,
+        });
       } else if (reason === 'attempts_exhausted') {
         await ctx.alerts.raise({
           severity: 'warning',
@@ -283,25 +294,12 @@ async function afterCommit(ctx: AppContext, decision: Decision): Promise<void> {
         'recording attach will be retried',
       );
       return;
-    case 'auth': {
-      const flipped = await pauseDelivery(
-        ctx.db,
-        ctx.clock.now(),
-        `Core returned ${decision.httpStatus} on SaveCallFile`,
-      );
+    case 'auth':
       ctx.log.error(
-        { ...decision.ids, httpStatus: decision.httpStatus, flipped },
-        'Core refused the API key on SaveCallFile; delivery paused',
+        { ...decision.ids, httpStatus: decision.httpStatus },
+        'Core refused the API key on SaveCallFile',
       );
-      if (flipped) {
-        ctx.metrics.set(METRICS.paused, 1);
-        await ctx.alerts.raise({
-          severity: 'critical',
-          code: ALERT_CODES.deliveryPaused,
-          message: `SOS delivery paused: Core returned ${decision.httpStatus} on SaveCallFile`,
-        });
-      }
+      await pauseForAuth(ctx, `Core returned ${decision.httpStatus} on SaveCallFile`);
       return;
-    }
   }
 }

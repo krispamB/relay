@@ -16,6 +16,7 @@
 import { DAY, HOUR } from '../clock.js';
 import type { AppContext } from '../context.js';
 import { bumpLiveVersion } from '../live/version.js';
+import { METRICS } from '../metrics.js';
 import type { Job } from './runner.js';
 import { STATUS_WINDOW_MS } from './statusPoller.js';
 
@@ -105,6 +106,7 @@ async function clearStalePendingRecordings(ctx: AppContext, windowCutoff: Date):
       for (const id of new Set(rows.map((r) => r.submission_id))) await bumpLiveVersion(trx, id);
       return rows.length;
     });
+    if (n > 0) ctx.metrics.inc(METRICS.recordingsDropped, { reason: 'window_ended' }, n);
     total += n;
     if (n < PURGE_BATCH) break;
   }

@@ -13,6 +13,11 @@ export type RecordingStatus = 'pending' | 'attached' | 'dropped';
 export type CheckStatus = 'unknown' | 'ok' | 'unhealthy';
 
 export const OPEN_STATUSES: readonly SubmissionStatus[] = ['queued', 'received', 'dispatched'];
+/** An SOS in one of these never changes again: no recording can be attached, the socket stream ends. */
+export const FINAL_STATUSES: readonly SubmissionStatus[] = ['closed', 'failed'];
+export function isFinalStatus(status: SubmissionStatus): boolean {
+  return FINAL_STATUSES.includes(status);
+}
 
 type NullableTimestamp = ColumnType<Date | null, Date | null | undefined, Date | null>;
 

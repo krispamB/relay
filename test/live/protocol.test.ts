@@ -14,10 +14,11 @@ function raw(value: unknown): string {
 }
 
 describe('CLOSE', () => {
-  it('uses the socket close codes from the live plan, plus 4029 for the per-user socket cap', () => {
+  it('uses the socket close codes from the live plan, plus 1013 when the token cannot be checked and 4029 for the per-user socket cap', () => {
     expect(CLOSE).toEqual({
       final: 1000,
       restart: 1012,
+      tryAgain: 1013,
       unauthorized: 4001,
       revoked: 4003,
       notFound: 4004,

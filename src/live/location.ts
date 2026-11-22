@@ -10,6 +10,7 @@
  */
 import { SECOND } from '../clock.js';
 import type { Db } from '../db/index.js';
+import { FINAL_STATUSES } from '../db/types.js';
 import { bumpLiveVersion } from './version.js';
 
 export const LOCATION_INTERVAL_MS = 5 * SECOND;
@@ -39,7 +40,7 @@ export async function storeLiveLocation(
       .set({ live_lat: fix.lat, live_lon: fix.lon, live_at: fix.capturedAt, live_stored_at: now })
       .where('id', '=', submissionId)
       .where('user_id', '=', userId)
-      .where('status', 'not in', ['closed', 'failed'])
+      .where('status', 'not in', FINAL_STATUSES)
       .where((eb) => eb.or([eb('live_stored_at', 'is', null), eb('live_stored_at', '<=', cutoff)]))
       .where((eb) => eb.or([eb('live_at', 'is', null), eb('live_at', '<', fix.capturedAt)]))
       .executeTakeFirst();

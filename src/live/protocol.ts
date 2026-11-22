@@ -6,6 +6,8 @@
 export const CLOSE = {
   final: 1000,
   restart: 1012,
+  /** The token could not be checked (database unreachable): reconnect with backoff. */
+  tryAgain: 1013,
   unauthorized: 4001,
   revoked: 4003,
   notFound: 4004,
