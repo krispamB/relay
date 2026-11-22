@@ -65,6 +65,7 @@ describe('requireUser / authenticate', () => {
       userId: 'user-1',
       familyId,
       jti: row.id,
+      expiresAt: new Date(session.accessTokenExpiresAt),
     });
   });
 

@@ -137,7 +137,10 @@ export const LiveSnapshotSchema: TSchema; // TypeBox, for the HTTP status route 
 export function buildSnapshot(input: SnapshotInput, now: Date): LiveSnapshot;
 
 // src/live/protocol.ts
-export const CLOSE = { final: 1000, restart: 1012, unauthorized: 4001, revoked: 4003, notFound: 4004, idle: 4008 } as const;
+export const CLOSE = { final: 1000, restart: 1012, unauthorized: 4001, revoked: 4003, notFound: 4004, idle: 4008,
+                       tooManySockets: 4029 } as const;   // 4029 added by C1: the per-user socket cap
+export const MAX_MESSAGE_BYTES = 8 * 1024;               // added by C1: also the socket's frame limit
+export type ServerErrorCode = 'bad_message' | 'not_subscribed' | 'invalid_location' | 'rate_limited' | 'unavailable';
 export type ClientMessage =
   | { type: 'auth'; token: string }
   | { type: 'subscribe'; receiptId: string }
@@ -171,6 +174,18 @@ export async function watchSubmission(db: Db, submissionId: string, now: Date): 
 Snapshot reads run in one repeatable-read transaction. `updatedAt` is the latest status change.
 Migration `007_live_poll_floor.sql` adds `submissions.last_poll_at` (when the poller last claimed the
 row for a Core read), which the floor counts from.
+
+## Seam 6: live socket (C1 writes)
+
+- Migration `008_live_socket.sql` adds `submissions.live_stored_at` (when the relay last stored a
+  socket location; the 1-per-5-s limit counts from it) and a trigger on `token_families` that sends
+  `NOTIFY session_revoked '<family id>'` when `revoked_at` goes from NULL to a value, or the row is
+  deleted, inside that transaction. `SESSION_REVOKED_CHANNEL` in `src/auth/sessions.ts` names it.
+- `src/auth/requireUser.ts` exports `verifyAccess(ctx, keys, token, options)`: `authenticate` without
+  the Bearer header and without the per-user rate limit. `AuthenticatedAccess` gains `expiresAt`.
+- `buildPublicApp(ctx, { live?: Partial<LiveOptions> })`: the socket's timeouts and limits
+  (`src/live/socket.ts`), shortened by the tests.
+- `storeLiveLocation(db, submissionId, userId, fix, now)` in `src/live/location.ts`.
 
 ## Rules for every stream
 

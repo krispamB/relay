@@ -13,8 +13,10 @@ import { authPlugin } from './auth/plugin.js';
 import { MINUTE } from './clock.js';
 import type { AppContext } from './context.js';
 import { ApiError, errors, safeError } from './errors.js';
+import type { LiveOptions } from './live/socket.js';
 import { METRICS } from './metrics.js';
 import { intakeRoutes } from './routes/intake.js';
+import { liveRoutes } from './routes/live.js';
 import { recordingRoutes } from './routes/recording.js';
 import { sosRoutes } from './routes/sos.js';
 import { statusRoutes } from './routes/status.js';
@@ -126,7 +128,12 @@ export class WindowLimiter {
   }
 }
 
-export async function buildPublicApp(ctx: AppContext): Promise<PublicApp> {
+export interface PublicAppOptions {
+  /** Live socket timings and limits; tests shorten the timeouts (src/live/socket.ts). */
+  live?: Partial<LiveOptions>;
+}
+
+export async function buildPublicApp(ctx: AppContext, options: PublicAppOptions = {}): Promise<PublicApp> {
   const app = Fastify({
     loggerInstance: ctx.log as FastifyBaseLogger,
     bodyLimit: 16 * 1024,
@@ -177,6 +184,7 @@ export async function buildPublicApp(ctx: AppContext): Promise<PublicApp> {
   await sosRoutes(app, ctx);
   await statusRoutes(app, ctx);
   await recordingRoutes(app, ctx);
+  await liveRoutes(app, ctx, options.live);
 
   // Encapsulated: its own error handler. Registered after the per-IP limiter hook, which it inherits.
   await app.register(authPlugin, { ctx });

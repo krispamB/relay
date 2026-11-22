@@ -206,7 +206,17 @@ export async function rotateRefreshToken(
   });
 }
 
-/** Revokes a family. Idempotent: returns true only for the call that revoked it, and keeps that time. */
+/**
+ * Every revocation of a family (revoked_at set, or the row deleted) is announced on this channel with
+ * the family id, by a trigger on token_families (migration 008), inside the revoking transaction. The
+ * live socket listens on it and closes that session's sockets on every instance.
+ */
+export const SESSION_REVOKED_CHANNEL = 'session_revoked';
+
+/**
+ * Revokes a family. Idempotent: returns true only for the call that revoked it, and keeps that time.
+ * The trigger announces it on SESSION_REVOKED_CHANNEL when the caller's transaction commits.
+ */
 export async function revokeFamily(db: Db, familyId: string, now: Date): Promise<boolean> {
   const r = await db
     .updateTable('token_families')
