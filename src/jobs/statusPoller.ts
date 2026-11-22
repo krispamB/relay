@@ -25,6 +25,7 @@ import type { CallStateResult, CoreResult } from '../core/types.js';
 import { type Db, isUniqueViolation } from '../db/index.js';
 import { OPEN_STATUSES, type Submission, type SubmissionStatus, type SubmissionUpdate } from '../db/types.js';
 import { safeError } from '../errors.js';
+import { bumpLiveVersion } from '../live/version.js';
 import { METRICS } from '../metrics.js';
 import { getState, pauseDelivery } from '../state.js';
 import type { Job } from './runner.js';
@@ -117,6 +118,7 @@ function pastWindow(acceptedAt: Date, now: Date): boolean {
   return now.getTime() - acceptedAt.getTime() >= STATUS_WINDOW_MS;
 }
 
+/** A status change, its event, and the live version bump, inside the caller's transaction. */
 async function writeTransition(
   trx: Db,
   row: Pick<Row, 'id' | 'status'>,
@@ -134,6 +136,11 @@ async function writeTransition(
     .insertInto('submission_events')
     .values({ submission_id: row.id, from_status: row.status, to_status: to, cause, at: now })
     .execute();
+  // Units are shown only while dispatched (plan §5.1): their rows go when the SOS leaves it.
+  if (row.status === 'dispatched' && to !== 'dispatched') {
+    await trx.deleteFrom('submission_units').where('submission_id', '=', row.id).execute();
+  }
+  await bumpLiveVersion(trx, row.id);
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -803,15 +803,36 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": false,
                   "type": "object",
                   "required": [
-                    "status",
+                    "type",
+                    "version",
+                    "receiptId",
                     "reference",
-                    "updatedAt"
+                    "status",
+                    "updatedAt",
+                    "recording",
+                    "units"
                   ],
                   "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "state"
+                      ]
+                    },
+                    "version": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "receiptId": {
+                      "type": "string"
+                    },
+                    "reference": {
+                      "type": "string"
+                    },
                     "status": {
-                      "description": "Where the SOS is now.",
                       "anyOf": [
                         {
                           "type": "string",
@@ -845,14 +866,85 @@
                         }
                       ]
                     },
-                    "reference": {
-                      "description": "Short code the caller can quote, such as SOS-7KQ2.",
-                      "type": "string"
-                    },
                     "updatedAt": {
                       "format": "date-time",
-                      "description": "Time of the last status change.",
                       "type": "string"
+                    },
+                    "recording": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "required": [
+                        "status"
+                      ],
+                      "properties": {
+                        "status": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "none"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "pending"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "attached"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "dropped"
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "units": {
+                      "type": "array",
+                      "items": {
+                        "additionalProperties": false,
+                        "type": "object",
+                        "required": [
+                          "key",
+                          "type",
+                          "status"
+                        ],
+                        "properties": {
+                          "key": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "status": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "lat": {
+                            "type": "number"
+                          },
+                          "lon": {
+                            "type": "number"
+                          },
+                          "distanceM": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "updatedAt": {
+                            "format": "date-time",
+                            "type": "string"
+                          }
+                        }
+                      }
                     }
                   }
                 }

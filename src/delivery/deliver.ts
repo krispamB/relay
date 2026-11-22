@@ -10,6 +10,7 @@ import type { CoreResult } from '../core/types.js';
 import type { Db } from '../db/index.js';
 import type { Submission, SubmissionStatus, SubmissionUpdate } from '../db/types.js';
 import { safeError } from '../errors.js';
+import { bumpLiveVersion } from '../live/version.js';
 import { METRICS } from '../metrics.js';
 import { pauseDelivery } from '../state.js';
 import { nextAttemptAt } from './backoff.js';
@@ -50,7 +51,10 @@ export interface AttemptOptions {
   dueOnly?: boolean;
 }
 
-/** Runs inside the claiming transaction: status change, its event row, updated_at. */
+/**
+ * Runs inside the claiming transaction: status change, its event row, updated_at, and the live
+ * version bump the snapshot needs (docs/live-sos-plan.md §5.3).
+ */
 async function transition(
   trx: Db,
   row: Pick<Submission, 'id' | 'status'>,
@@ -68,6 +72,7 @@ async function transition(
     .insertInto('submission_events')
     .values({ submission_id: row.id, from_status: row.status, to_status: to, cause, at: now })
     .execute();
+  await bumpLiveVersion(trx, row.id);
 }
 
 export function isPastHardStop(acceptedAt: Date, now: Date): boolean {
@@ -90,6 +95,7 @@ export async function failExpiredInTrx(trx: Db, row: Submission, now: Date): Pro
     .insertInto('submission_events')
     .values({ submission_id: row.id, from_status: 'queued', to_status: 'failed', cause: 'expired', at: now })
     .execute();
+  await bumpLiveVersion(trx, row.id);
 }
 
 /**

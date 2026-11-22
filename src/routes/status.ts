@@ -4,6 +4,8 @@ import { deriveAuthKeys } from '../auth/keys.js';
 import type { AppContext } from '../context.js';
 import { errors } from '../errors.js';
 import { RECEIPT_ID_PATTERN } from '../ids.js';
+import { readSnapshot } from '../live/read.js';
+import { LiveSnapshotSchema } from '../live/snapshot.js';
 import { METRICS } from '../metrics.js';
 import { requireCaller } from '../sos/caller.js';
 
@@ -15,25 +17,11 @@ const ErrorResponse = Type.Object({
   }),
 });
 
-const StatusResponse = Type.Object({
-  status: Type.Union(
-    [
-      Type.Literal('queued'),
-      Type.Literal('received'),
-      Type.Literal('dispatched'),
-      Type.Literal('closed'),
-      Type.Literal('failed'),
-    ],
-    { description: 'Where the SOS is now.' },
-  ),
-  reference: Type.String({ description: 'Short code the caller can quote, such as SOS-7KQ2.' }),
-  updatedAt: Type.String({ format: 'date-time', description: 'Time of the last status change.' }),
-});
-
 const receiptIdRe = new RegExp(RECEIPT_ID_PATTERN);
 
 /**
  * PRD §7.5; docs/live-sos-plan.md §3.3. Reads the database only; never touches ctx.core.
+ * Returns the same live snapshot as the socket (plan §5.3, src/live/read.ts).
  * Authenticated by the owner's access token. Someone else's receipt is the same 404 as an unknown
  * one, so receipt ids cannot be probed.
  */
@@ -54,7 +42,7 @@ export async function statusRoutes(app: PublicApp, ctx: AppContext): Promise<voi
         // different from the 404 every other bad request gets.
         params: Type.Object({ receiptId: Type.String() }),
         response: {
-          200: StatusResponse,
+          200: LiveSnapshotSchema,
           401: ErrorResponse,
           404: ErrorResponse,
           429: ErrorResponse,
@@ -66,14 +54,9 @@ export async function statusRoutes(app: PublicApp, ctx: AppContext): Promise<voi
       const caller = await requireCaller(ctx, keys, req);
       if (!receiptIdRe.test(receiptId)) throw errors.notFound();
 
-      // One query for existence and ownership: another user's SOS is not found.
-      const sub = await ctx.db
-        .selectFrom('submissions')
-        .select(['status', 'reference', 'accepted_at'])
-        .where('id', '=', receiptId)
-        .where('user_id', '=', caller.userId)
-        .executeTakeFirst();
-      if (!sub) throw errors.notFound();
+      // One read for existence and ownership: another user's SOS is not found.
+      const snapshot = await readSnapshot(ctx.db, receiptId, caller.userId, ctx.clock.now());
+      if (!snapshot) throw errors.notFound();
 
       // Only the owner reaches the limiter, so a stranger cannot use up someone else's allowance.
       const retry = limiter.hit(receiptId, ctx.clock.now().getTime());
@@ -81,18 +64,7 @@ export async function statusRoutes(app: PublicApp, ctx: AppContext): Promise<voi
         ctx.metrics.inc(METRICS.rateLimited, { rule: 'status_poll' });
         throw errors.rateLimited(retry);
       }
-
-      const last = await ctx.db
-        .selectFrom('submission_events')
-        .select((eb) => eb.fn.max('at').as('at'))
-        .where('submission_id', '=', receiptId)
-        .executeTakeFirst();
-
-      return {
-        status: sub.status,
-        reference: sub.reference,
-        updatedAt: (last?.at ?? sub.accepted_at).toISOString(),
-      };
+      return snapshot;
     },
   );
 }
