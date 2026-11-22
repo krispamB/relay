@@ -3,10 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { deriveAuthKeys, signinPhoneHash } from '../../src/auth/keys.js';
 
 const SECRET = 'auth-token-secret-for-tests-0123456789ab';
-const NAMES = ['access', 'refresh', 'signupBody', 'signinPhone'] as const;
+const NAMES = ['access', 'refresh', 'signupBody', 'signinPhone', 'liveUnit'] as const;
 
 describe('deriveAuthKeys', () => {
-  it('derives four 32-byte keys', () => {
+  it('derives five 32-byte keys', () => {
     const keys = deriveAuthKeys(SECRET);
     for (const name of NAMES) {
       expect(Buffer.isBuffer(keys[name])).toBe(true);

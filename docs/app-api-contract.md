@@ -401,6 +401,13 @@ Relay → app: `{ "type": "state", … }` with:
 | `recording.status` | `none`, `pending`, `attached`, or `dropped` (last recording). |
 | `units` | Only when `status` is `dispatched`. Unit **type**, status text, coordinates, straight-line `distanceM` (no names or call signs). Empty until a unit's Core destination is this call; until then the UI shows waiting copy (see plan D12). |
 | `distanceM` | Haversine from caller's live location if under 2 minutes old, else incident location, else omitted. |
+| `units[].key` | A stable opaque id for one unit (`u_` + 32 hex), the same on every snapshot, so the map can move one marker. It is not Core's unit id. |
+
+**Freshness.** While the app is subscribed (subscribe, then a ping every 25 s), the relay reads the
+call every 15 s and the units every `UNIT_POLL_INTERVAL_S` (default 10 s). When nobody has watched
+for 60 s it falls back to the slow schedule (15 s received, 60 s dispatched, 5 min closed) and stops
+reading units: the last units seen stay in the snapshot, each with its own `updatedAt`, until the SOS
+leaves `dispatched`. The HTTP status route reads the database only and does not count as watching.
 
 HTTP `GET /v1/sos/:receiptId/status` returns this same object, `"type": "state"` included.
 

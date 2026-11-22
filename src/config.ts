@@ -48,6 +48,8 @@ export interface Config {
   alertWebhookUrl: string | undefined;
   demoDispatchAfterS: number;
   demoCloseAfterS: number;
+  /** Seconds between GetAllUnitStatuses calls while a watched SOS is dispatched (plan D13). */
+  unitPollIntervalS: number;
   limits: Limits;
 }
 
@@ -191,6 +193,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     alertWebhookUrl,
     demoDispatchAfterS: int('DEMO_DISPATCH_AFTER_S', 30, 1),
     demoCloseAfterS: int('DEMO_CLOSE_AFTER_S', 90, 1),
+    unitPollIntervalS: int('UNIT_POLL_INTERVAL_S', 10, 1),
     limits,
   };
   if (!config.intakesFile && !config.intakesJson) problems.push('INTAKES_FILE or INTAKES_JSON is required');

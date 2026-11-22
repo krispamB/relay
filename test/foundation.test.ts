@@ -86,6 +86,15 @@ describe('config', () => {
   });
 });
 
+describe('UNIT_POLL_INTERVAL_S', () => {
+  it('defaults to 10 s and must be a whole number of seconds, at least 1', () => {
+    expect(loadConfig(baseEnv).unitPollIntervalS).toBe(10);
+    expect(loadConfig({ ...baseEnv, UNIT_POLL_INTERVAL_S: '30' }).unitPollIntervalS).toBe(30);
+    expect(() => loadConfig({ ...baseEnv, UNIT_POLL_INTERVAL_S: '0' })).toThrow(/UNIT_POLL_INTERVAL_S/);
+    expect(() => loadConfig({ ...baseEnv, UNIT_POLL_INTERVAL_S: '2.5' })).toThrow(/UNIT_POLL_INTERVAL_S/);
+  });
+});
+
 describe('intakes', () => {
   const ok = {
     code: 'DEPT-01',

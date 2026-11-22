@@ -60,6 +60,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     alertWebhookUrl: undefined,
     demoDispatchAfterS: 30,
     demoCloseAfterS: 90,
+    unitPollIntervalS: 10,
     limits: { ...DEFAULT_LIMITS },
     ...overrides,
   };
