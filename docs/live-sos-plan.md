@@ -66,10 +66,10 @@ The department key needs exactly: `calls.create`, `calls.read`, `calls.update`, 
 | `POST CallFiles/SaveCallFile` | `calls.update` | Attach a recording. Body `{ CallId, UserId, Type: 1, Name, Data }`; `Data` is base64. Core ignores `UserId` and records the managing user, but the field is required, so send a fixed placeholder. 201 `{ Id }`. Active or pending calls only. |
 | `GET UnitStatus/GetAllUnitStatuses` | `units.read` | Units heading to a call (D12) and their coordinates. |
 
-`SaveCallFile` documents no `Idempotency-Key` (§15.3 says only `SaveCall` honours one; confirm in
-Core before slice 5). Without it, a retry after a lost 201 can attach the audio twice. The
-relay accepts that risk (a duplicate audio file is harmless to a dispatcher) and keeps the retry
-count low (§4.4). `GetFilesForCall` is not open to the key, so the relay cannot check first.
+`SaveCallFile` documents no `Idempotency-Key`, but a live Core honours one (live checklist,
+2026-11-22). The relay sends the recording id as the key on every attempt, so a retry after a lost
+201 does not attach the audio twice. A call that does not exist answers HTTP 200 with `Status`
+`not_found`, which the relay reads as closed, as it does a 400.
 
 ### 2.3 Mock Core
 

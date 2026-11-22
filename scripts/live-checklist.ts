@@ -924,7 +924,7 @@ async function check15(): Promise<void> {
 
   // 1. The client, as the relay uses it.
   const name = `CHK-${runId}-1.m4a`;
-  const ok = await client.saveCallFile({ callId: id, name, data: SAMPLE_FILE });
+  const ok = await client.saveCallFile({ callId: id, name, data: SAMPLE_FILE, idempotencyKey: idemKey() });
   if (ok.kind === 'ok') evidence.push(`pending call ${id}: attached as file ${ok.data.fileId}`);
   else problems.push(`attach to pending call ${id} gave ${JSON.stringify(ok)}, expected ok`);
 
@@ -958,16 +958,22 @@ async function check15(): Promise<void> {
     evidence.push(`check by hand that call ${id} shows ${name} (--no-interactive)`);
   }
 
-  // 3. A call that does not exist. The swagger declares only 400 ProblemDetails; the client must read it as closed.
+  // 3. A call that does not exist. A live Core answered HTTP 200, Status "not_found", Id null (2026-11-22);
+  // the client must read it as closed.
   const ghost = '2147483000';
   const gr = await raw('POST', 'CallFiles/SaveCallFile', { body: fileBody(ghost, `CHK-${runId}-x.m4a`) });
-  const gc = await client.saveCallFile({ callId: ghost, name: `CHK-${runId}-x.m4a`, data: SAMPLE_FILE });
+  const gc = await client.saveCallFile({
+    callId: ghost,
+    name: `CHK-${runId}-x.m4a`,
+    data: SAMPLE_FILE,
+    idempotencyKey: idemKey(),
+  });
   const ghostFinding = `unknown call ${ghost}: ${brief(gr)} -> client says ${gc.kind}`;
   measurements.push(`SaveCallFile, unknown call: ${brief(gr)}`);
   evidence.push(ghostFinding);
   if (gc.kind !== 'call_closed') {
     problems.push(
-      `unknown call is not read as call_closed (${gc.kind}): update CALL_CLOSED_STATUSES in src/core/client.ts`,
+      `unknown call is not read as call_closed (${gc.kind}): update saveCallFile in src/core/client.ts`,
     );
   }
 
@@ -975,7 +981,7 @@ async function check15(): Promise<void> {
   const closedSteps = [
     `In Resgrid, dispatch call ${id} ("${PREFIX} attach ${runId}") if needed, then CLOSE it (any close type).`,
     `Try to attach a file to it: curl -s -XPOST -H "X-Resgrid-ApiKey: $RESGRID_API_KEY" -H 'Content-Type: application/json' -d '{"CallId":"${id}","UserId":"00000000-0000-0000-0000-000000000000","Type":1,"Name":"x.m4a","Data":"AAAA"}' "$RESGRID_API_BASE/api/v4/CallFiles/SaveCallFile"`,
-    'Record the HTTP status and body. It must be 400 (ProblemDetails), which the client reads as call_closed.',
+    'Record the HTTP status and body. The client reads HTTP 200 with Status "not_found", or HTTP 400, as call_closed.',
   ];
   if (!interactive) {
     record(
@@ -991,7 +997,7 @@ async function check15(): Promise<void> {
     say('      MANUAL STEP:');
     for (const [i, st] of closedSteps.entries()) say(`        ${i + 1}. ${st}`);
     say(
-      '      EXPECT: HTTP 400 ProblemDetails (what the client maps to call_closed). Anything else: change src/core/client.ts.',
+      '      EXPECT: HTTP 200 with Status "not_found", or HTTP 400 (what the client maps to call_closed). Anything else: change src/core/client.ts.',
     );
     return;
   }
@@ -1000,13 +1006,18 @@ async function check15(): Promise<void> {
   );
   await sleep(1000);
   const cr = await raw('POST', 'CallFiles/SaveCallFile', { body: fileBody(id, `CHK-${runId}-closed.m4a`) });
-  const cc = await client.saveCallFile({ callId: id, name: `CHK-${runId}-closed.m4a`, data: SAMPLE_FILE });
+  const cc = await client.saveCallFile({
+    callId: id,
+    name: `CHK-${runId}-closed.m4a`,
+    data: SAMPLE_FILE,
+    idempotencyKey: idemKey(),
+  });
   const closedFinding = `closed call ${id}: ${brief(cr)} -> client says ${cc.kind}`;
   measurements.push(`SaveCallFile, closed call: ${brief(cr)}`);
   evidence.push(closedFinding);
   if (cc.kind !== 'call_closed') {
     problems.push(
-      `a closed call is not read as call_closed (${cc.kind}; ${brief(cr)}): update CALL_CLOSED_STATUSES in src/core/client.ts`,
+      `a closed call is not read as call_closed (${cc.kind}; ${brief(cr)}): update saveCallFile in src/core/client.ts`,
     );
   }
   record(

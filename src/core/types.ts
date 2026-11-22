@@ -76,10 +76,11 @@ export interface CoreClient {
   getFieldPolicy(): Promise<CoreResult<{ requiredKeys: string[] }>>;
   /**
    * Attaches a file to a call (CallFiles/SaveCallFile). `call_closed` means Core refused because the
-   * call is no longer active or pending (or is gone): do not retry.
+   * call is no longer active or pending (or is gone): do not retry. `idempotencyKey` is sent as the
+   * `Idempotency-Key` header (the relay uses the recording id), so a retry never attaches twice.
    */
   saveCallFile(
-    input: { callId: string; name: string; data: Buffer },
+    input: { callId: string; name: string; data: Buffer; idempotencyKey: string },
     opts?: { timeoutMs?: number },
   ): Promise<CoreResult<{ fileId: string }> | { kind: 'call_closed' }>;
   /** Every unit's latest status in the department. Empty when Core says not_found. */

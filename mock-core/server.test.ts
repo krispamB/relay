@@ -626,11 +626,15 @@ describe('SaveCallFile', () => {
     expect((await attach(fileBody(callId))).status).toBe(201);
   });
 
-  it('answers 400 for a call that does not exist or was deleted', async () => {
-    expect((await attach(fileBody('424242'))).status).toBe(400);
+  // What a live Core answered for an unknown call (live checklist, 2026-11-22).
+  it('answers 200, Status not_found, Id null for a call that does not exist or was deleted', async () => {
+    const unknown = await attach(fileBody('424242'));
+    expect(unknown.status).toBe(200);
+    expect(unknown.json).toMatchObject({ Status: 'not_found', Id: null });
     const callId = (await save()).json?.Id as string;
     mock.control.deleteCall(callId);
-    expect((await attach(fileBody(callId))).status).toBe(400);
+    expect((await attach(fileBody(callId))).json).toMatchObject({ Status: 'not_found', Id: null });
+    expect(mock.control.files()).toEqual([]);
   });
 
   it('answers 400 for a missing field, a bad Type or Data that is not base64', async () => {
@@ -660,10 +664,20 @@ describe('SaveCallFile', () => {
     expect((await attach(fileBody(callId))).status).toBe(401);
   });
 
-  it('has no idempotency: attaching twice stores two files', async () => {
+  // A live Core honours the key on SaveCallFile (live checklist, 2026-11-22: same id twice).
+  it('honours Idempotency-Key: the same key returns the same Id and stores one file', async () => {
     const callId = (await save()).json?.Id as string;
-    const a = await attach(fileBody(callId), { 'Idempotency-Key': 'k' });
-    const b = await attach(fileBody(callId), { 'Idempotency-Key': 'k' });
+    const a = await attach(fileBody(callId), { 'Idempotency-Key': 'rec_k' });
+    const b = await attach(fileBody(callId), { 'Idempotency-Key': 'rec_k' });
+    expect(b.status).toBe(a.status);
+    expect(b.json?.Id).toBe(a.json?.Id);
+    expect(mock.control.files({ callId })).toHaveLength(1);
+  });
+
+  it('without a key, attaching twice stores two files', async () => {
+    const callId = (await save()).json?.Id as string;
+    const a = await attach(fileBody(callId));
+    const b = await attach(fileBody(callId));
     expect(a.json?.Id).not.toBe(b.json?.Id);
     expect(mock.control.files({ callId })).toHaveLength(2);
   });

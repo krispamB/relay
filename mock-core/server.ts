@@ -367,6 +367,8 @@ export function createMockCore(options: MockCoreOptions = {}): MockCore {
   let calls = new Map<number, StoredCall>();
   let files: StoredCallFile[] = [];
   let nextFileId = 5000;
+  /** SaveCallFile Idempotency-Key → the file id it created. */
+  let fileKeys = new Map<string, string>();
   let units: UnitStatusRow[] = [];
   let requestLog: RecordedRequest[] = [];
   let seq = 0;
@@ -818,10 +820,11 @@ export function createMockCore(options: MockCoreOptions = {}): MockCore {
   );
 
   // --- SaveCallFile ---
-  // No Idempotency-Key: Core documents none for this endpoint, so a repeat stores a second file.
-  // The v4 swagger declares 200 / 201 SaveCallFileResult and 400 ProblemDetails, nothing else. A call
-  // that is not active or pending, or does not exist, gets the 400; the relay's client reads it as
-  // "closed". scripts/live-checklist.ts confirms it against a real Core.
+  // Measured against a live Core (live checklist, 2026-11-22):
+  // - Idempotency-Key is honoured: the same key returns the same Id, and only one file is stored.
+  // - A call that does not exist answers HTTP 200, Status "not_found", Id null.
+  // Not yet measured: a closed call. The mock answers it with the swagger's 400 ProblemDetails; the
+  // relay's client reads both answers as "closed".
   const fileDef = ENDPOINT_DEFS[6];
   app.post(
     `/api/v4/${fileDef.name}`,
@@ -860,7 +863,12 @@ export function createMockCore(options: MockCoreOptions = {}): MockCore {
         return { status: 400 };
       }
       const call = calls.get(Number(callIdText.trim()));
-      if (!call || call.Deleted || (call.State !== 0 && call.State !== 8)) {
+      if (!call || call.Deleted) return { status: 200, json: envelope('not_found', { Id: null }) };
+      const rawKey = req.headers['idempotency-key'];
+      const key = typeof rawKey === 'string' && rawKey.trim() !== '' ? rawKey.trim() : null;
+      const known = key === null ? undefined : fileKeys.get(key);
+      if (known !== undefined) return { status: 201, json: envelope('created', { Id: known }) };
+      if (call.State !== 0 && call.State !== 8) {
         return {
           status: 400,
           json: {
@@ -881,6 +889,7 @@ export function createMockCore(options: MockCoreOptions = {}): MockCore {
         Size: data.length,
         SavedAtUtc: new Date().toISOString(),
       });
+      if (key !== null) fileKeys.set(key, id);
       return { status: 201, json: envelope('created', { Id: id }) };
     }),
   );
@@ -988,6 +997,7 @@ export function createMockCore(options: MockCoreOptions = {}): MockCore {
       epoch += 1;
       calls = new Map();
       files = [];
+      fileKeys = new Map();
       nextFileId = 5000;
       nextCallId = firstCallId;
       requestLog = [];

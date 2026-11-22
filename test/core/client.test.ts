@@ -511,7 +511,7 @@ describe('reads', () => {
 
 describe('saveCallFile (CallFiles/SaveCallFile)', () => {
   const audio = Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0xff, 0xfe, 0x01, 0x80]);
-  const file = { callId: '48213', name: 'SOS-7KQ2-1.m4a', data: audio };
+  const file = { callId: '48213', name: 'SOS-7KQ2-1.m4a', data: audio, idempotencyKey: 'rec_01JDTESTKEY' };
 
   it('posts { CallId, UserId, Type: 1, Name, Data } with Data base64, and returns the attachment id', async () => {
     handler = (_r, res) => reply(res, 201, envelope({ Status: 'created', Id: '9001' }));
@@ -524,6 +524,9 @@ describe('saveCallFile (CallFiles/SaveCallFile)', () => {
     expect(s.headers['x-resgrid-apikey']).toBe(API_KEY);
     expect(s.headers.authorization).toBeUndefined();
     expect(s.headers['content-type']).toBe('application/json');
+    // A live Core honours Idempotency-Key on SaveCallFile (live checklist, 2026-11-22): a retry after a
+    // lost 201 returns the same file instead of attaching the audio twice.
+    expect(s.headers['idempotency-key']).toBe('rec_01JDTESTKEY');
     const sent = JSON.parse(s.body) as Record<string, unknown>;
     expect(Object.keys(sent).sort()).toEqual(['CallId', 'Data', 'Name', 'Type', 'UserId']);
     expect(sent.CallId).toBe('48213');
@@ -538,6 +541,17 @@ describe('saveCallFile (CallFiles/SaveCallFile)', () => {
   it('accepts a numeric Id in the 201 body', async () => {
     handler = (_r, res) => reply(res, 201, envelope({ Status: 'created', Id: 77 }));
     expect(await client.saveCallFile(file)).toMatchObject({ kind: 'ok', data: { fileId: '77' } });
+  });
+
+  // What a live Core answers for a call that does not exist (live checklist, 2026-11-22): HTTP 200,
+  // Status "not_found", Id null. The call can never take the file, so this is call_closed, not a retry.
+  it('200 with Status not_found and Id null → call_closed', async () => {
+    handler = (_r, res) => reply(res, 200, envelope({ Status: 'not_found', Id: null }));
+    expect(await client.saveCallFile(file)).toEqual({ kind: 'call_closed' });
+    expect(metrics.incs).toContainEqual({
+      name: METRICS.coreCalls,
+      labels: { endpoint: 'SaveCallFile', result: 'call_closed' },
+    });
   });
 
   it('201 without an Id → retryable', async () => {

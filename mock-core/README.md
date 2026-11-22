@@ -17,11 +17,12 @@ Endpoints (all under `/api/v4/`): `Calls/SaveCall`, `Calls/GetCall`, `Calls/GetP
 
 `CallFiles/SaveCallFile` takes `{ CallId, UserId, Type, Name, Data }` (all required, `Data` strict base64) and
 answers 201 `{ Id }`. It keeps the call id, name and decoded size, never the bytes (`GET /__control/files`),
-and the request log shows `Data` as a character count. There is no idempotency: sending twice stores two
-files, like real Core. A call that is not active or pending (state 1 to 7) gets **HTTP 400**, a call that does
-not exist or was deleted gets **404**. Real Core's answer for that is not documented
-(sos-app-PRD.md §15.2 says only "Active or pending calls only"), so these two are assumptions; the relay's
-client reads 400, 404 and 410 as `call_closed`, and `scripts/live-checklist.ts` check 15 prints what a real
+and the request log shows `Data` as a character count. Measured against a live Core on 2026-11-22 and copied
+here: an `Idempotency-Key` is honoured (the same key returns the same `Id` and stores one file; without a key,
+sending twice stores two), and a call that does not exist or was deleted gets **HTTP 200** with `Status`
+`not_found` and `Id: null`. A call that is not active or pending (state 1 to 7) gets **HTTP 400**
+`ProblemDetails`, as the v4 swagger declares; real Core's answer for a closed call is not yet measured.
+The relay's client reads both as `call_closed`, and `scripts/live-checklist.ts` check 15 records what a real
 Core answers.
 
 `UnitStatus/GetAllUnitStatuses` returns the list set with `PUT /__control/unit-statuses` (or the

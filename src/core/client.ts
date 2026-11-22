@@ -298,7 +298,7 @@ export function createCoreClient(cfg: CoreClientConfig, deps: CoreClientDeps): C
     endpoint: Endpoint,
     path: string,
     init: { method: 'GET' | 'POST'; body?: string; idempotencyKey?: string; timeoutMs: number },
-    onSuccess: (statusCode: number, json: Record<string, unknown>) => CoreResult<T>,
+    onSuccess: (statusCode: number, json: Record<string, unknown>) => CoreResult<T> | X,
     logFields: Record<string, unknown> = {},
     onFailure?: (statusCode: number) => X | undefined,
   ): Promise<CoreResult<T> | X> {
@@ -464,14 +464,23 @@ export function createCoreClient(cfg: CoreClientConfig, deps: CoreClientDeps): C
         Name: input.name,
         Data: input.data.toString('base64'),
       });
-      return call(
+      return call<{ fileId: string }, { kind: 'call_closed' }>(
         'SaveCallFile',
         'CallFiles/SaveCallFile',
-        { method: 'POST', body, timeoutMs: opts?.timeoutMs ?? SAVE_CALL_FILE_TIMEOUT_MS },
+        {
+          method: 'POST',
+          body,
+          // Honoured by a live Core (live checklist, 2026-11-22): a retry after a lost 201 gets the same file.
+          idempotencyKey: input.idempotencyKey,
+          timeoutMs: opts?.timeoutMs ?? SAVE_CALL_FILE_TIMEOUT_MS,
+        },
         (statusCode, json) => {
           if (statusCode !== 200 && statusCode !== 201) {
             return { kind: 'retryable', reason: `unexpected HTTP ${statusCode}` };
           }
+          // A live Core answers a call that does not exist with HTTP 200, Status "not_found", Id null
+          // (live checklist, 2026-11-22). The file can never go on that call: same as closed.
+          if (json.Status === 'not_found') return { kind: 'call_closed' };
           const id = json.Id;
           if ((typeof id !== 'string' && typeof id !== 'number') || String(id).trim() === '') {
             return { kind: 'retryable', reason: 'success without Id' };
@@ -480,7 +489,7 @@ export function createCoreClient(cfg: CoreClientConfig, deps: CoreClientDeps): C
         },
         // `size`, not `bytes`: the logger redacts any `bytes` key (audio).
         { callId: input.callId, size: input.data.length },
-        // 400 ProblemDetails is Core's only declared refusal: the call is not active or pending (CALL_CLOSED_STATUSES).
+        // 400 ProblemDetails is Core's only declared refusal (CALL_CLOSED_STATUSES); a gone call is the 200 not_found above.
         (statusCode) => (CALL_CLOSED_STATUSES.has(statusCode) ? { kind: 'call_closed' as const } : undefined),
       );
     },

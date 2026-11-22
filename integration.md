@@ -324,16 +324,19 @@ Attaches the caller's voice recording after the pending call exists. The relay s
 ```
 
 - Core **requires** `UserId` but ignores the value; the relay sends a configured placeholder.
-- **200 or 201** `SaveCallFileResult` with `Id` is success; store the file id. These, and **400**
-  `ProblemDetails`, are the only answers the v4 swagger declares. Active and pending calls only: Core refuses a
-  closed, deleted or unknown call with the 400, which the relay reads as "call closed" and drops the recording.
-  Any other 4xx is unexpected (for example a 404 from a wrong base path) and alerts instead.
+- **200 or 201** `SaveCallFileResult` with `Id` is success; store the file id.
+- **A call that does not exist** answers **HTTP 200** with `Status: "not_found"` and `Id: null`. This was measured
+  against a live Core on 2026-11-22. The relay reads it as "call closed" and drops the recording.
+- **400** `ProblemDetails` is the only refusal the v4 swagger declares. The relay also reads it as "call closed".
+  Core's answer for a **closed** call (active or pending calls only) is not yet measured: it is one of these two,
+  and the interactive live checklist (check 15) records which.
+- Any other 4xx is unexpected (for example a 404 from a wrong base path) and alerts instead.
 - **Timeouts and 5xx / 429:** retry with backoff like delivery, at most 5 attempts.
 
-**Idempotency:** the v4 swagger declares no `Idempotency-Key` on `SaveCallFile` (only `SaveCall` honours one;
-live checklist check 15 measures it). A retry after a lost **201** can attach the same audio twice.
-The relay accepts that risk—a duplicate audio file is harmless to a dispatcher—and keeps retry counts low.
-`GetFilesForCall` is not available to the department key, so the relay cannot check before attach.
+**Idempotency:** the v4 swagger declares no `Idempotency-Key` on `SaveCallFile`, but a live Core **honours** one
+(live checklist check 15, 2026-11-22: two requests with one key returned the same file id). The relay sends the
+recording id (`rec_…`) as the key on every attempt, so a retry after a lost **201** gets the same file back
+instead of attaching the audio twice.
 
 ### 5.6 Unit statuses: `GET UnitStatus/GetAllUnitStatuses`
 
@@ -543,7 +546,8 @@ Run against a real Sentinel dev instance with a test department:
 - [ ] A revoked key returns 401 within about 60 seconds of revocation.
 - [ ] Record what `GetCall` returns for a deleted call, and the longest `Name`, `Nature`, `Address` and `Note` Core accepts.
 - [ ] `SaveCallFile` on an active pending call returns **201** with a file `Id`; the file is visible to dispatch on that call.
-- [ ] `SaveCallFile` on a closed call answers **400** `ProblemDetails` (what the relay reads as "call closed").
+- [ ] `SaveCallFile` on a closed call answers **400** `ProblemDetails` or **200** `Status: "not_found"` (what the relay reads as "call closed"); an unknown call answers 200 `not_found` (measured 2026-11-22).
+- [x] `SaveCallFile` honours `Idempotency-Key` (measured 2026-11-22).
 - [ ] `GetAllUnitStatuses` returns at least one unit; moving a unit's destination to the test call id shows it in the relay's filtered list.
 
 ---

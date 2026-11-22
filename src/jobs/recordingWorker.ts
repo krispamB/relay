@@ -171,6 +171,7 @@ async function attachOne(ctx: AppContext, recordingId: string): Promise<void> {
         callId: sub.core_call_id,
         name: `${sub.reference}-${rec.seq}.m4a`,
         data: rec.bytes,
+        idempotencyKey: rec.id,
       });
     } catch (err) {
       // The client is not supposed to throw; if it does, the outcome is unknown, so retry.
@@ -273,7 +274,7 @@ async function afterCommit(ctx: AppContext, decision: Decision): Promise<void> {
         await ctx.alerts.raise({
           severity: 'warning',
           code: ALERT_CODES.recordingDropped,
-          message: `Core refused the recording of SOS ${ids.reference} with HTTP 400 (read as "call closed") while the relay still saw the call as open; it was dropped`,
+          message: `Core refused the recording of SOS ${ids.reference} as "call closed" (HTTP 400, or 200 not_found) while the relay still saw the call as open; it was dropped`,
           reference: ids.reference,
           receiptId: ids.receiptId,
         });

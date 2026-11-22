@@ -201,6 +201,36 @@ describe('recording worker', () => {
       await app.close();
     });
 
+    it('a retry after Core saved the file but the answer was lost attaches it once (Idempotency-Key)', async () => {
+      const ctx = mockContext(mock);
+      const app = await buildPublicApp(ctx);
+      const user = await seedUser(ctx);
+      const id = await insertSubmissionOn(ctx.db, user.user.id, ctx.clock.now(), {
+        id: newReceiptId(ctx.clock.now().getTime()),
+      });
+      const up = await upload(app, id, { token: user.token() });
+      expect(await attemptDelivery(ctx, id)).toBe('received');
+      const callId = (await getSubmission(ctx.db, id)).core_call_id!;
+
+      // Core stores the file, then the answer is lost.
+      mock.control.injectFault('CallFiles/SaveCallFile', { status: 500, afterProcessing: true });
+      await runRecordingPass(ctx);
+      expect(await recording(ctx, up.body.recordingId)).toMatchObject({ status: 'pending', attempts: 1 });
+      expect(mock.control.files({ callId })).toHaveLength(1);
+
+      ctx.clock.advanceSeconds(60);
+      await runRecordingPass(ctx);
+      const rec = await recording(ctx, up.body.recordingId);
+      expect(rec).toMatchObject({ status: 'attached', bytes: null });
+      const files = mock.control.files({ callId });
+      expect(files).toHaveLength(1);
+      expect(rec.core_file_id).toBe(files[0]!.Id);
+      const sent = mock.control.requests({ endpoint: 'CallFiles/SaveCallFile' });
+      expect(sent).toHaveLength(2);
+      expect(new Set(sent.map((r) => r.headers['idempotency-key']))).toEqual(new Set([up.body.recordingId]));
+      await app.close();
+    });
+
     it('a recording for a call a dispatcher closed first ends dropped, with its bytes cleared', async () => {
       const ctx = mockContext(mock);
       const app = await buildPublicApp(ctx);
