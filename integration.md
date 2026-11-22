@@ -18,7 +18,7 @@ Core is not changed for this integration. The relay uses the public v4 REST API 
 |---|---|
 | Base URL | `{RESGRID_API_BASE}/api/v4/` |
 | Auth header | `X-Resgrid-ApiKey: rgk_…` |
-| Key scopes needed | `calls.create`, `calls.read`, `reference.read` |
+| Key scopes needed | `calls.create`, `calls.read`, `calls.update`, `units.read`, `reference.read` |
 | Content type | `application/json` |
 | Response field casing | **PascalCase** (`Id`, `Status`, `Data`, `State`) |
 | Retry safety | Send `Idempotency-Key` on `SaveCall` |
@@ -31,6 +31,8 @@ Core is not changed for this integration. The relay uses the public v4 REST API 
 | Read the required-field policy | `GET Calls/GetNewCallFieldPolicy` | `calls.read` |
 | List call types | `GET CallTypes/GetAllCallTypes` | `reference.read` |
 | List call priorities | `GET CallPriorities/GetAllCallPriorites` | `reference.read` |
+| Attach a call file (voice recording) | `POST CallFiles/SaveCallFile` | `calls.update` |
+| Unit statuses (all units) | `GET UnitStatus/GetAllUnitStatuses` | `units.read` |
 
 `GetAllCallPriorites` is misspelled in Core. Use it exactly as written.
 
@@ -154,6 +156,21 @@ Idempotency-Key: sos_01JCQ8Z3M5V7T9W2X4Y6A8B0CD
 | `Note` | string | No | The structured note block. |
 
 Core's maximum lengths for the text columns were not checked. Keep `Name` under 100 characters and test the longest allowed `Nature`, `Address` and `Note` against a real instance.
+
+### 4.2.1 Live SOS mapping (pilot)
+
+For account-based one-tap SOS ([`docs/live-sos-plan.md`](docs/live-sos-plan.md) §3.2), the relay sets:
+
+| Field | Value |
+|---|---|
+| `Name` | `[PUBLIC SOS] SOS` |
+| `Nature` | Config `SOS_NATURE_TEXT` (default `SOS – caller recording to follow`) |
+| `ContactName` | The signed-in user's full name |
+| `ContactInfo` | The user's phone (E.164) |
+| `Note` | Still labels an unverified member of the public; includes `Phone: … (unverified)` |
+
+The app does not send name, phone or nature on `POST /v1/sos`. `Geolocation` and `Address` still come from
+the SOS body when present.
 
 ### 4.3 Fields the relay must never send
 
@@ -289,6 +306,44 @@ Because 401 has two meanings here, don't pause the queue on a 401 from `GetCall`
 - `GetCall` does a lot of work per request in Core. Keep the 15-second cache per call from the PRD and never poll Core faster than that.
 - `GET Calls/GetPendingCalls` returns every pending call for the department in one request, ordered oldest first, in `Data` as an array of the same call objects. When there are no pending calls it returns `Status: "not_found"` with an empty array.
 - With many open submissions in one department, poll `GetPendingCalls` once per interval: a submission whose `CallId` is in the list is still `received`; one that has dropped out needs a single `GetCall` to learn whether it was dispatched or closed.
+
+### 5.5 Attach a call file: `POST CallFiles/SaveCallFile`
+
+**Scope:** `calls.update`.
+
+Attaches the caller's voice recording after the pending call exists. The relay sends:
+
+```json
+{
+  "CallId": "<core call id>",
+  "UserId": "<fixed placeholder>",
+  "Type": 1,
+  "Name": "SOS-7KQ2-1.m4a",
+  "Data": "<base64 of raw .m4a bytes>"
+}
+```
+
+- Core **requires** `UserId` but ignores the value; the relay sends a configured placeholder.
+- **201** with `{ "Id" }` is success; store the file id. Active and pending calls only; closed calls are
+  refused (the relay maps that to dropping the recording).
+- **Timeouts and 5xx / 429:** retry with backoff like delivery, at most 5 attempts.
+
+**Idempotency:** Core documents no `Idempotency-Key` on `SaveCallFile` (only `SaveCall` honours one; confirm
+against a live Core before relying on this). A retry after a lost **201** can attach the same audio twice.
+The relay accepts that risk—a duplicate audio file is harmless to a dispatcher—and keeps retry counts low.
+`GetFilesForCall` is not available to the department key, so the relay cannot check before attach.
+
+### 5.6 Unit statuses: `GET UnitStatus/GetAllUnitStatuses`
+
+**Scope:** `units.read`.
+
+Returns every unit's current status for the department. The relay calls this **once per interval** while any
+SOS is being watched and at least one watched submission is `dispatched` (plan D13), then keeps only rows where
+`DestinationType = 2` (call) and `DestinationId` equals the Core call id (plan D12). Those rows drive the
+live snapshot `units` array in [`app-api-contract.md`](docs/app-api-contract.md).
+
+Unit names and call signs are not sent to the app. Coordinates and status text come from Core's response
+fields the relay maps in code (TBD in build: exact PascalCase field names in the live Core envelope).
 
 ---
 
@@ -457,7 +512,7 @@ Done once per department by a department admin in the Resgrid web UI:
 
 1. Create a call type named exactly as the relay's `callTypeName` (e.g. `Public SOS`).
 2. Pick the call priority for SOS calls and note its numeric id (also visible through `GetAllCallPriorites`).
-3. Under Security → API Keys, create a key with scopes `calls.create`, `calls.read` and `reference.read` only. Set the IP allowlist to the relay's egress IP. Set an expiry of 730 days or less and record the date in relay config.
+3. Under Security → API Keys, create a key with scopes **`calls.create`, `calls.read`, `calls.update`, `units.read`, `reference.read`** only. Set the IP allowlist to the relay's egress IP. Set an expiry of 730 days or less and record the date in relay config.
 4. Review the new-call field policy against §7.
 5. Confirm the department's managing user is allowed to create calls (true by default for a department admin).
 
@@ -481,6 +536,9 @@ Run against a real Sentinel dev instance with a test department:
 - [ ] A request from an address outside the allowlist returns 401.
 - [ ] A revoked key returns 401 within about 60 seconds of revocation.
 - [ ] Record what `GetCall` returns for a deleted call, and the longest `Name`, `Nature`, `Address` and `Note` Core accepts.
+- [ ] `SaveCallFile` on an active pending call returns **201** with a file `Id`; the file is visible to dispatch on that call.
+- [ ] `SaveCallFile` on a closed call is refused with the same behaviour the relay expects for "call not active/pending".
+- [ ] `GetAllUnitStatuses` returns at least one unit; moving a unit's destination to the test call id shows it in the relay's filtered list.
 
 ---
 
