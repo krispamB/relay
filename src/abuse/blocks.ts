@@ -2,7 +2,7 @@ import type { Db } from '../db/index.js';
 import type { SubjectType } from '../db/types.js';
 
 /**
- * True when a live block exists (PRD §9.2). `subject` is a device id, or the keyed hash of a
+ * True when a live block exists (PRD §9.2). `subject` is a user id, or the keyed hash of a
  * phone number from `phoneHash()` — never a phone number in the clear.
  */
 export async function isBlocked(db: Db, type: SubjectType, subject: string, now: Date): Promise<boolean> {

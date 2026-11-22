@@ -8,7 +8,7 @@ import { type KyselyPlugin, sql } from 'kysely';
 import { type Logger, pino } from 'pino';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildPublicApp } from '../../src/app.js';
-import { deriveAuthKeys, signinEmailHash } from '../../src/auth/keys.js';
+import { deriveAuthKeys, signinPhoneHash } from '../../src/auth/keys.js';
 import * as password from '../../src/auth/password.js';
 import { verifyAccessToken } from '../../src/auth/tokens.js';
 import { SIGNIN_PASSWORD_MAX_CHARS } from '../../src/auth/validate.js';
@@ -39,7 +39,7 @@ async function setup(log?: Logger) {
     ...(log ? { log } : {}),
     config: {
       ...base,
-      auth: { enabled: true, tokenSecret: AUTH_SECRET },
+      auth: { tokenSecret: AUTH_SECRET },
       limits: { ...base.limits, requestsPerIpPerMinute: 10_000 },
     },
   });
@@ -53,16 +53,24 @@ const device = { platform: 'android' as const, appVersion: '0.3.0', installId: I
 function signupBody(n: number, over: Record<string, unknown> = {}) {
   return {
     fullName: 'Ada Okafor',
-    phone: `+234803123${String(n).padStart(4, '0')}`,
-    email: `user${n}@example.com`,
+    phone: phoneOf(n),
     password: PASSWORD,
     device,
     ...over,
   };
 }
 
-function signinBody(email: string, password: string, over: Record<string, unknown> = {}) {
-  return { email, password, device, ...over };
+/** The n-th user's phone: a valid Nigerian mobile number, distinct per n. */
+function phoneOf(n: number): string {
+  return `+234803123${String(n).padStart(4, '0')}`;
+}
+const PHONE_1 = phoneOf(1);
+const PHONE_2 = phoneOf(2);
+/** A well-formed number no account has. */
+const UNKNOWN_PHONE = '+2348099999999';
+
+function signinBody(phone: string, password: string, over: Record<string, unknown> = {}) {
+  return { phone, password, device, ...over };
 }
 
 function signup(app: FastifyInstance, body: unknown, ip = '203.0.113.1') {
@@ -121,17 +129,18 @@ const countRows = async (table: 'users' | 'signin_attempts' | 'token_families') 
 describe('200 OK', () => {
   it('returns the sign-up user shape and a working access token', async () => {
     const { app, ctx, metrics } = await setup();
-    const created = await signup(app, signupBody(1, { email: ' Ada@Example.com ' }));
+    const created = await signup(app, signupBody(1));
     expect(created.statusCode).toBe(201);
     const signedUp = created.json();
 
-    const res = await signin(app, signinBody(' ADA@example.com ', PASSWORD));
+    const res = await signin(app, signinBody(` ${PHONE_1} `, PASSWORD));
 
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toBe('application/json; charset=utf-8');
     const body = res.json();
     expect(body.user).toEqual(signedUp.user);
-    expect(body.user.email).toBe('ada@example.com');
+    expect(body.user.phone).toBe(PHONE_1);
+    expect(body.user).not.toHaveProperty('email');
     expect(Object.keys(body.session).sort()).toEqual([
       'accessToken',
       'accessTokenExpiresAt',
@@ -161,7 +170,7 @@ describe('200 OK', () => {
     const created = (await signup(app, signupBody(1))).json();
     const second = await signin(
       app,
-      signinBody('user1@example.com', PASSWORD, {
+      signinBody(PHONE_1, PASSWORD, {
         device: { platform: 'ios', appVersion: '1.2.3', installId: OTHER_INSTALL },
       }),
     );
@@ -184,24 +193,23 @@ describe('200 OK', () => {
     expect((await me(app, signedIn.session.accessToken)).json().user.id).toBe(created.user.id);
   });
 
-  it('stores only a keyed hash of the email', async () => {
+  it('stores only a keyed hash of the phone number', async () => {
     const { app } = await setup();
     await signup(app, signupBody(1));
-    expect((await signin(app, signinBody('user1@example.com', PASSWORD))).statusCode).toBe(200);
+    expect((await signin(app, signinBody(PHONE_1, PASSWORD))).statusCode).toBe(200);
     const rows = await testDb().selectFrom('signin_attempts').selectAll().execute();
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.email_hash).toBe(signinEmailHash(keys.signinEmail, 'user1@example.com'));
-    expect(rows[0]?.email_hash).not.toContain('user1');
-    expect(JSON.stringify(rows[0])).not.toContain('example.com');
+    expect(rows[0]?.phone_hash).toBe(signinPhoneHash(keys.signinPhone, PHONE_1));
+    expect(JSON.stringify(rows[0])).not.toContain(PHONE_1.slice(1));
   });
 });
 
 describe('401 invalid_credentials', () => {
-  it('wrong password and unknown email have byte-identical bodies', async () => {
+  it('wrong password and unknown phone have byte-identical bodies', async () => {
     const { app, metrics } = await setup();
     expect((await signup(app, signupBody(1))).statusCode).toBe(201);
-    const wrong = await signin(app, signinBody('user1@example.com', 'not the password'));
-    const unknown = await signin(app, signinBody('nobody@example.com', PASSWORD));
+    const wrong = await signin(app, signinBody(PHONE_1, 'not the password'));
+    const unknown = await signin(app, signinBody(UNKNOWN_PHONE, PASSWORD));
 
     expect(wrong.statusCode).toBe(401);
     expect(unknown.statusCode).toBe(401);
@@ -216,12 +224,12 @@ describe('401 invalid_credentials', () => {
 
   it('a value that cannot match an account is not a 400', async () => {
     const { app } = await setup();
-    const email = await signin(app, signinBody('not-an-email', 'short'));
-    const empty = await signin(app, signinBody('user1@example.com', ''));
-    expect(email.statusCode).toBe(401);
-    expect(email.json().error.code).toBe('invalid_credentials');
+    const phone = await signin(app, signinBody('not-a-phone', 'short'));
+    const empty = await signin(app, signinBody(PHONE_1, ''));
+    expect(phone.statusCode).toBe(401);
+    expect(phone.json().error.code).toBe('invalid_credentials');
     expect(empty.statusCode).toBe(401);
-    expect(empty.body).toBe(email.body);
+    expect(empty.body).toBe(phone.body);
   });
 
   it('a password longer than 1024 characters is invalid_credentials and is not verified', async () => {
@@ -229,27 +237,27 @@ describe('401 invalid_credentials', () => {
     expect((await signup(app, signupBody(1))).statusCode).toBe(201);
     const spy = vi.spyOn(password, 'verifyPassword');
     const tooLong = 'x'.repeat(SIGNIN_PASSWORD_MAX_CHARS + 1);
-    const known = await signin(app, signinBody('user1@example.com', tooLong));
-    const unknown = await signin(app, signinBody('nobody@example.com', tooLong));
+    const known = await signin(app, signinBody(PHONE_1, tooLong));
+    const unknown = await signin(app, signinBody(UNKNOWN_PHONE, tooLong));
     expect(known.statusCode).toBe(401);
     expect(unknown.statusCode).toBe(401);
     expect(known.body).toBe(unknown.body);
     expect(known.json().error.code).toBe('invalid_credentials');
     expect(spy).not.toHaveBeenCalled();
 
-    const atCap = await signin(app, signinBody('user1@example.com', 'y'.repeat(SIGNIN_PASSWORD_MAX_CHARS)));
+    const atCap = await signin(app, signinBody(PHONE_1, 'y'.repeat(SIGNIN_PASSWORD_MAX_CHARS)));
     expect(atCap.statusCode).toBe(401);
     expect(spy).toHaveBeenCalledTimes(1);
     spy.mockRestore();
   });
 
-  it('a deleted user is invalid_credentials, the same body as an unknown email', async () => {
+  it('a deleted user is invalid_credentials, the same body as an unknown phone', async () => {
     const { app } = await setup();
     const created = (await signup(app, signupBody(1))).json();
     await testDb().deleteFrom('users').where('id', '=', created.user.id).execute();
 
-    const deleted = await signin(app, signinBody('user1@example.com', PASSWORD));
-    const unknown = await signin(app, signinBody('nobody@example.com', PASSWORD));
+    const deleted = await signin(app, signinBody(PHONE_1, PASSWORD));
+    const unknown = await signin(app, signinBody(UNKNOWN_PHONE, PASSWORD));
     expect(deleted.statusCode).toBe(401);
     expect(deleted.body).toBe(unknown.body);
   });
@@ -273,7 +281,7 @@ describe('validation', () => {
 
   it('a wrong JSON type is malformed_request, ahead of any missing field', async () => {
     const { app } = await setup();
-    const res = await signin(app, { email: 1, device: 'phone' });
+    const res = await signin(app, { phone: 1, device: 'phone' });
     expect(res.statusCode).toBe(400);
     expect(res.json().error.code).toBe('malformed_request');
     expect(res.json().error).not.toHaveProperty('fields');
@@ -286,7 +294,7 @@ describe('validation', () => {
     expect(res.json().error).toMatchObject({
       code: 'validation_failed',
       fields: [
-        { field: 'email', code: 'required' },
+        { field: 'phone', code: 'required' },
         { field: 'password', code: 'required' },
         { field: 'device', code: 'required' },
       ],
@@ -298,11 +306,25 @@ describe('validation', () => {
     const res = await signin(app, { extra: true, device: { ...device, os: 'android' } });
     expect(res.statusCode).toBe(400);
     expect(res.json().error.fields).toEqual([
-      { field: 'email', code: 'required' },
+      { field: 'phone', code: 'required' },
       { field: 'password', code: 'required' },
       { field: 'extra', code: 'invalid_value' },
       { field: 'device.os', code: 'invalid_value' },
     ]);
+  });
+
+  it('email is no longer a sign-in field: it is unknown, and the phone is required', async () => {
+    const { app } = await setup();
+    const res = await signin(app, { email: 'ada@example.com', password: PASSWORD, device });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatchObject({
+      code: 'validation_failed',
+      fields: [
+        { field: 'phone', code: 'required' },
+        { field: 'email', code: 'invalid_value' },
+      ],
+    });
+    expect(await countRows('signin_attempts')).toBe(0);
   });
 
   it.each([
@@ -312,10 +334,7 @@ describe('validation', () => {
     ['installId', { installId: 'not-a-uuid' }, 'device.installId', 'invalid_value'],
   ])('device %s follows the sign-up rule', async (_name, deviceOver, field, code) => {
     const { app } = await setup();
-    const res = await signin(
-      app,
-      signinBody('user1@example.com', PASSWORD, { device: { ...device, ...deviceOver } }),
-    );
+    const res = await signin(app, signinBody(PHONE_1, PASSWORD, { device: { ...device, ...deviceOver } }));
     expect(res.statusCode).toBe(400);
     expect(res.json().error.code).toBe('validation_failed');
     expect(res.json().error.fields).toContainEqual({ field, code });
@@ -329,19 +348,19 @@ describe('validation', () => {
       const res = await signin(app, { password: PASSWORD });
       expect(res.statusCode).toBe(400);
     }
-    expect((await signin(app, signinBody('user1@example.com', PASSWORD))).statusCode).toBe(200);
+    expect((await signin(app, signinBody(PHONE_1, PASSWORD))).statusCode).toBe(200);
   });
 });
 
 describe('rate limits', () => {
-  it('the 11th attempt for one email in an hour is 429 from any IP, and the next hour allows it', async () => {
+  it('the 11th attempt for one phone in an hour is 429 from any IP, and the next hour allows it', async () => {
     const { app, ctx, metrics } = await setup();
     expect((await signup(app, signupBody(1))).statusCode).toBe(201);
     for (let n = 1; n <= 10; n++) {
-      const res = await signin(app, signinBody('user1@example.com', PASSWORD), { ip: `198.51.100.${n}` });
+      const res = await signin(app, signinBody(PHONE_1, PASSWORD), { ip: `198.51.100.${n}` });
       expect(res.statusCode).toBe(200);
     }
-    const limited = await signin(app, signinBody('user1@example.com', PASSWORD), { ip: '198.51.100.99' });
+    const limited = await signin(app, signinBody(PHONE_1, PASSWORD), { ip: '198.51.100.99' });
     expect(limited.statusCode).toBe(429);
     expect(limited.json()).toEqual({
       error: { code: 'rate_limited', message: expect.any(String), retryAfterSeconds: 60 * 60 },
@@ -352,58 +371,54 @@ describe('rate limits', () => {
     expect(metrics.count(METRICS.authSignins, { result: 'rate_limited' })).toBe(1);
 
     ctx.clock.advance(HOUR - 1);
-    const still = await signin(app, signinBody('user1@example.com', PASSWORD), { ip: '198.51.100.98' });
+    const still = await signin(app, signinBody(PHONE_1, PASSWORD), { ip: '198.51.100.98' });
     expect(still.statusCode).toBe(429);
     expect(still.json().error.retryAfterSeconds).toBe(1);
 
     ctx.clock.advance(1);
-    const again = await signin(app, signinBody('user1@example.com', PASSWORD), { ip: '198.51.100.97' });
+    const again = await signin(app, signinBody(PHONE_1, PASSWORD), { ip: '198.51.100.97' });
     expect(again.statusCode).toBe(200);
     expect(await countRows('signin_attempts')).toBe(11);
   });
 
-  it('another email is not affected', async () => {
+  it('another phone is not affected', async () => {
     const { app } = await setup();
     expect((await signup(app, signupBody(1))).statusCode).toBe(201);
     expect((await signup(app, signupBody(2), '203.0.113.2')).statusCode).toBe(201);
     for (let n = 1; n <= 10; n++) {
-      expect(
-        (await signin(app, signinBody('user1@example.com', 'nope'), { ip: `203.0.113.${n}` })).statusCode,
-      ).toBe(401);
+      expect((await signin(app, signinBody(PHONE_1, 'nope'), { ip: `203.0.113.${n}` })).statusCode).toBe(401);
     }
-    expect(
-      (await signin(app, signinBody('user2@example.com', PASSWORD), { ip: '203.0.113.50' })).statusCode,
-    ).toBe(200);
+    expect((await signin(app, signinBody(PHONE_2, PASSWORD), { ip: '203.0.113.50' })).statusCode).toBe(200);
   });
 
   it('the 21st attempt from one IP in an hour is 429, and the window reopens after an hour', async () => {
     const { app, ctx } = await setup();
     for (let n = 1; n <= 20; n++) {
-      const res = await signin(app, signinBody(`nobody${n}@example.com`, 'nope'));
+      const res = await signin(app, signinBody(phoneOf(100 + n), 'nope'));
       expect(res.statusCode).toBe(401);
     }
     ctx.clock.advance(10 * MINUTE);
-    const limited = await signin(app, signinBody('nobody21@example.com', 'nope'));
+    const limited = await signin(app, signinBody(phoneOf(121), 'nope'));
     expect(limited.statusCode).toBe(429);
     expect(limited.json().error).toMatchObject({ code: 'rate_limited', retryAfterSeconds: 50 * 60 });
     expect(limited.headers['retry-after']).toBe(String(50 * 60));
     expect(await countRows('signin_attempts')).toBe(20);
 
-    expect(
-      (await signin(app, signinBody('nobody22@example.com', 'nope'), { ip: '198.51.100.8' })).statusCode,
-    ).toBe(401);
+    expect((await signin(app, signinBody(phoneOf(122), 'nope'), { ip: '198.51.100.8' })).statusCode).toBe(
+      401,
+    );
     ctx.clock.advance(HOUR);
-    expect((await signin(app, signinBody('nobody23@example.com', 'nope'))).statusCode).toBe(401);
+    expect((await signin(app, signinBody(phoneOf(123), 'nope'))).statusCode).toBe(401);
   });
 });
 
 describe('concurrency', () => {
-  it('15 parallel attempts on one email evaluate exactly 10', async () => {
+  it('15 parallel attempts on one phone evaluate exactly 10', async () => {
     const { app, metrics } = await setup();
     expect((await signup(app, signupBody(1))).statusCode).toBe(201);
     const results = await Promise.all(
       Array.from({ length: 15 }, (_, i) =>
-        signin(app, signinBody('user1@example.com', PASSWORD), { ip: `198.51.100.${i + 1}` }),
+        signin(app, signinBody(PHONE_1, PASSWORD), { ip: `198.51.100.${i + 1}` }),
       ),
     );
     expect(results.filter((r) => r.statusCode === 200)).toHaveLength(10);
@@ -432,7 +447,7 @@ describe('a revoked session', () => {
     expect(reuse.json().error.code).toBe('session_revoked');
     expect((await me(app, child.accessToken)).json().error.code).toBe('session_revoked');
 
-    const back = await signin(app, signinBody('user1@example.com', PASSWORD));
+    const back = await signin(app, signinBody(PHONE_1, PASSWORD));
     expect(back.statusCode).toBe(200);
     expect(back.json().user).toEqual(created.user);
     expect((await me(app, back.json().session.accessToken)).statusCode).toBe(200);
@@ -441,75 +456,75 @@ describe('a revoked session', () => {
 });
 
 describe('logs', () => {
-  it('a successful sign-in names the user id and neither the email nor the password', async () => {
+  it('a successful sign-in names the user id and neither the phone nor the password', async () => {
     const lines: string[] = [];
     const log = pino({ level: 'trace' }, { write: (s: string) => void lines.push(s) });
     const { app } = await setup(log);
-    const email = 'distinctive.signin@example.com';
+    const phone = '+2348039876543';
     const password = 'distinctive-signin-password-9f3c';
-    const created = await signup(app, signupBody(1, { email, password }));
+    const created = await signup(app, signupBody(1, { phone, password }));
     expect(created.statusCode).toBe(201);
     lines.length = 0;
-    const res = await signin(app, signinBody(email, password));
+    const res = await signin(app, signinBody(phone, password));
     expect(res.statusCode).toBe(200);
     const out = lines.join('\n');
     expect(out).toContain(res.json().user.id);
-    expect(out).not.toContain(email);
+    expect(out).not.toContain(phone.slice(1));
     expect(out).not.toContain(password);
   });
 
-  it('a failed sign-in leaves the user id, the email and the password out of the log', async () => {
+  it('a failed sign-in leaves the user id, the phone and the password out of the log', async () => {
     const lines: string[] = [];
     const log = pino({ level: 'trace' }, { write: (s: string) => void lines.push(s) });
     const { app } = await setup(log);
-    const email = 'distinctive.signin@example.com';
+    const phone = '+2348039876543';
     const password = 'distinctive-signin-password-9f3c';
-    const created = await signup(app, signupBody(1, { email, password }));
+    const created = await signup(app, signupBody(1, { phone, password }));
     expect(created.statusCode).toBe(201);
     lines.length = 0;
     const wrong = 'wrong-password-distinctive-9f3c';
-    const res = await signin(app, signinBody(email, wrong));
+    const res = await signin(app, signinBody(phone, wrong));
     expect(res.statusCode).toBe(401);
     const out = lines.join('\n');
     expect(out).not.toContain(created.json().user.id);
-    expect(out).not.toContain(email);
+    expect(out).not.toContain(phone.slice(1));
     expect(out).not.toContain(password);
     expect(out).not.toContain(wrong);
   });
 });
 
 describe('review fixes', () => {
-  it('an unknown email still runs exactly one password verification', async () => {
+  it('an unknown phone still runs exactly one password verification', async () => {
     const { app } = await setup();
     const spy = vi.spyOn(password, 'verifyPassword');
-    const res = await signin(app, signinBody('nobody@example.com', PASSWORD));
+    const res = await signin(app, signinBody(UNKNOWN_PHONE, PASSWORD));
     expect(res.statusCode).toBe(401);
     expect(spy).toHaveBeenCalledTimes(1);
     spy.mockRestore();
   });
 
-  it('an email with a NUL character is 401 invalid_credentials, not 500, and is still verified', async () => {
+  it('a phone with a NUL character is 401 invalid_credentials, not 500, and is still verified', async () => {
     const { app } = await setup();
     const spy = vi.spyOn(password, 'verifyPassword');
-    const res = await signin(app, signinBody('a\u0000@example.com', PASSWORD));
+    const res = await signin(app, signinBody(`${PHONE_1}\u0000`, PASSWORD));
     expect(res.statusCode).toBe(401);
     expect(res.json().error.code).toBe('invalid_credentials');
     expect(spy).toHaveBeenCalledTimes(1);
     spy.mockRestore();
   });
 
-  it('a request refused by the per-email limit does not use up the per-IP budget', async () => {
+  it('a request refused by the per-phone limit does not use up the per-IP budget', async () => {
     const { app } = await setup();
     const ip = '198.51.100.77';
-    for (let i = 0; i < 10; i++) await signin(app, signinBody('victim@example.com', 'wrong'), { ip });
+    for (let i = 0; i < 10; i++) await signin(app, signinBody(PHONE_2, 'wrong'), { ip });
     for (let i = 0; i < 10; i++) {
-      expect((await signin(app, signinBody('victim@example.com', 'wrong'), { ip })).statusCode).toBe(429);
+      expect((await signin(app, signinBody(PHONE_2, 'wrong'), { ip })).statusCode).toBe(429);
     }
     // 10 counted from this IP so far: 10 more are allowed before the per-IP limit of 20.
     for (let i = 0; i < 10; i++) {
-      expect((await signin(app, signinBody(`other${i}@example.com`, 'wrong'), { ip })).statusCode).toBe(401);
+      expect((await signin(app, signinBody(phoneOf(200 + i), 'wrong'), { ip })).statusCode).toBe(401);
     }
-    expect((await signin(app, signinBody('one-more@example.com', 'wrong'), { ip })).statusCode).toBe(429);
+    expect((await signin(app, signinBody(phoneOf(299), 'wrong'), { ip })).statusCode).toBe(429);
   });
   it('a user deleted between the lookup and the session insert is 401, and leaves no session behind', async () => {
     const { app: plain } = await setup();
@@ -536,12 +551,12 @@ describe('review fixes', () => {
     const base = testConfig();
     const ctx = createTestContext({
       db: testDb().withPlugin(deleteAfterLookup),
-      config: { ...base, auth: { enabled: true, tokenSecret: AUTH_SECRET } },
+      config: { ...base, auth: { tokenSecret: AUTH_SECRET } },
     });
     const app = await buildPublicApp(ctx);
     open.push(app);
 
-    const res = await signin(app, signinBody('user1@example.com', PASSWORD));
+    const res = await signin(app, signinBody(PHONE_1, PASSWORD));
     expect(deleted).toBe(true);
     expect(res.statusCode).toBe(401);
     expect(res.json().error.code).toBe('invalid_credentials');

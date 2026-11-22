@@ -39,7 +39,7 @@ async function setup() {
     clock,
     config: {
       ...base,
-      auth: { enabled: true, tokenSecret: SECRET },
+      auth: { tokenSecret: SECRET },
       // Above the per-user cap, so a 429 here is the user limit and not the relay's per-IP limit.
       limits: { ...base.limits, requestsPerIpPerMinute: 10_000 },
     },
@@ -58,7 +58,6 @@ async function insertUser(id: string) {
       id,
       full_name: 'Ada Okafor',
       phone: `+2348${String(seq).padStart(9, '0')}`,
-      email: `${id}@example.com`,
       password_hash: '$argon2id$stub',
       created_at: now,
       updated_at: now,
@@ -92,7 +91,6 @@ describe('GET /v1/me', () => {
         id: 'user-1',
         fullName: 'Ada Okafor',
         phone: '+2348000000001',
-        email: 'user-1@example.com',
         phoneVerified: false,
         createdAt: '2026-11-18T12:00:00Z',
       },

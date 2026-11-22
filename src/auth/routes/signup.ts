@@ -12,20 +12,19 @@
  *    session. Different HMAC: 422 idempotency_key_reused. Neither counts toward a rate limit. A row 24 h
  *    old or older is treated as absent (the purge deletes it later) and is upserted over.
  * 4. Rate limits (contract §5). Counted: every request that is not a replay and has a valid body, whatever
- *    it ends in, so a 409 counts (that is what slows enumeration of emails and phones). Not counted: a 400,
+ *    it ends in, so a 409 counts (that is what slows enumeration of phone numbers). Not counted: a 400,
  *    a 422, a replay, and a request refused by a limit (it never adds a phone attempt, so a client that
  *    keeps retrying cannot stretch its own lock-out). The IP limit is checked first; a request it refuses
  *    is not recorded against the phone.
- * 5. Uniqueness pre-check (email first: both taken is `email_taken`), then the password is hashed OUTSIDE
+ * 5. Uniqueness pre-check (the phone), then the password is hashed OUTSIDE
  *    any transaction (it takes ~50 ms of CPU and a transaction holds a pooled connection), then one
  *    transaction: user, session, idempotency row.
  *
  * Races:
  * - Two requests with the same key and body both pass step 3, and both reach the transaction. The first to
- *   commit wins; the second fails on a unique index of `users` (it waits for the first to finish) or on the
+ *   commit wins; the second fails on the unique phone of `users` (it waits for the first to finish) or on the
  *   idempotency key. Either way it re-reads the key and answers as a replay (or 422): never a 409.
- * - Two different sign-ups for one email or phone: the loser's unique violation becomes `email_taken` or
- *   `phone_taken`, with email first as in the pre-check.
+ * - Two different sign-ups for one phone: the loser's unique violation becomes `phone_taken`.
  * - The phone limit is exact under concurrency: counting and recording run under an advisory lock per phone.
  *   A request that only turns out to be a replay or a 422 after it was counted (a same-key twin committed
  *   first) gives back both its per-IP hit and its phone attempt, so neither ever uses up an allowance.
@@ -63,7 +62,6 @@ interface UserBody {
   id: string;
   fullName: string;
   phone: string;
-  email: string;
   phoneVerified: boolean;
   createdAt: string;
 }
@@ -77,7 +75,6 @@ const userBody = (u: User): UserBody => ({
   id: u.id,
   fullName: u.full_name,
   phone: u.phone,
-  email: u.email,
   phoneVerified: false,
   createdAt: rfc3339(u.created_at),
 });
@@ -101,7 +98,6 @@ function bodyHmac(key: Buffer, input: SignupInput): string {
   const canonical = JSON.stringify({
     fullName: input.fullName,
     phone: input.phone,
-    email: input.email,
     password: input.password,
     device: {
       platform: input.device.platform,
@@ -184,16 +180,10 @@ async function refundPhoneAttempt(ctx: AppContext, attemptId: string): Promise<v
   await ctx.db.deleteFrom('signup_phone_attempts').where('id', '=', attemptId).execute();
 }
 
-/** The error for an email or phone that already has an account. Email first. */
-async function findTaken(db: Db, email: string, phone: string): Promise<AuthError | undefined> {
-  const rows = await db
-    .selectFrom('users')
-    .select(['email', 'phone'])
-    .where((eb) => eb.or([eb('email', '=', email), eb('phone', '=', phone)]))
-    .execute();
-  if (rows.some((r) => r.email === email)) return authErrors.emailTaken();
-  if (rows.length > 0) return authErrors.phoneTaken();
-  return undefined;
+/** The error for a phone number that already has an account. */
+async function findTaken(db: Db, phone: string): Promise<AuthError | undefined> {
+  const row = await db.selectFrom('users').select('id').where('phone', '=', phone).executeTakeFirst();
+  return row ? authErrors.phoneTaken() : undefined;
 }
 
 /** Thrown inside the transaction when the key was taken meanwhile, to roll the new user back. */
@@ -216,7 +206,6 @@ async function createAccount(
         id,
         full_name: input.fullName,
         phone: input.phone,
-        email: input.email,
         password_hash: passwordHash,
         created_at: now,
         updated_at: now,
@@ -250,17 +239,15 @@ async function answerRace(
   idempotencyKey: string,
   hmac: string,
 ): Promise<SignupResponse> {
-  const emailClash = isUniqueViolation(err, 'users_email_key');
   const phoneClash = isUniqueViolation(err, 'users_phone_key');
-  if (!(err instanceof KeyInUse) && !emailClash && !phoneClash) throw err;
+  if (!(err instanceof KeyInUse) && !phoneClash) throw err;
 
   // Same key: the other request is this one, retried in parallel.
   const stored = await findStoredKey(ctx.db, idempotencyKey, ctx.clock.now());
   if (stored) return answerReplay(ctx, keys, stored, hmac, input);
 
-  const taken = await findTaken(ctx.db, input.email, input.phone);
+  const taken = await findTaken(ctx.db, input.phone);
   if (taken) throw taken;
-  if (emailClash) throw authErrors.emailTaken();
   if (phoneClash) throw authErrors.phoneTaken();
   throw err;
 }
@@ -300,7 +287,6 @@ const SIGNUP_SCHEMA = {
     {
       fullName: Type.String({ minLength: 1, maxLength: 100 }),
       phone: Type.String({ pattern: '^\\+[1-9]\\d{6,14}$', description: 'E.164.' }),
-      email: Type.String({ maxLength: 254, description: 'Trimmed and lower-cased by the server.' }),
       password: Type.String({ minLength: 8, maxLength: 128 }),
       device: Type.Object(
         {
@@ -319,7 +305,6 @@ const SIGNUP_SCHEMA = {
         id: Type.String(),
         fullName: Type.String(),
         phone: Type.String(),
-        email: Type.String(),
         phoneVerified: Type.Boolean(),
         createdAt: Type.String({ format: 'date-time' }),
       }),
@@ -380,7 +365,7 @@ export async function signupRoutes(app: PublicApp, ctx: AppContext): Promise<voi
       }
     };
 
-    const taken = await findTaken(ctx.db, input.email, input.phone);
+    const taken = await findTaken(ctx.db, input.phone);
     if (taken) {
       // A parallel request with this key may have committed since the lookup above: then the
       // clash is with our own account, and the answer is its replay, not a 409.
@@ -400,7 +385,7 @@ export async function signupRoutes(app: PublicApp, ctx: AppContext): Promise<voi
       signupResult = 'created';
     } catch (err) {
       // A lost race answers as the winner's replay (or throws). It did not create this user.
-      // email_taken / phone_taken from here stay counted, like any 409.
+      // phone_taken from here stays counted, like any 409.
       created = await uncounted(answerRace(ctx, keys, err, input, idempotencyKey, hmac));
       signupResult = 'replay';
     }

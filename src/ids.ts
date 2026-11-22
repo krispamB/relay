@@ -6,10 +6,6 @@ export function newReceiptId(nowMs: number): string {
   return `sos_${ulid(nowMs)}`;
 }
 
-export function newDeviceId(nowMs: number): string {
-  return `dev_${ulid(nowMs)}`;
-}
-
 export function newBlockId(nowMs: number): string {
   return `blk_${ulid(nowMs)}`;
 }

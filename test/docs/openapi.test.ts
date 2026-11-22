@@ -20,8 +20,6 @@ const AUTH_OPERATIONS: [method: string, path: string][] = [
 
 const SOS_OPERATIONS: [method: string, path: string][] = [
   ['get', '/v1/intake/{intakeCode}'],
-  ['get', '/v1/devices/nonce'],
-  ['post', '/v1/devices/register'],
   ['post', '/v1/sos'],
   ['get', '/v1/sos/{receiptId}/status'],
 ];
@@ -36,11 +34,8 @@ describe('docs/openapi.json', () => {
     expect(committedText).toBe(await renderOpenApi());
   });
 
-  it('is what the relay serves at GET /v1/openapi.json when auth is enabled', async () => {
-    const base = testConfig();
-    const app = await buildPublicApp(
-      createTestContext({ config: { ...base, auth: { ...base.auth, enabled: true } } }),
-    );
+  it('is what the relay serves at GET /v1/openapi.json', async () => {
+    const app = await buildPublicApp(createTestContext({ config: testConfig() }));
     try {
       const res = await app.inject({ method: 'GET', url: '/v1/openapi.json' });
       expect(res.statusCode).toBe(200);
@@ -59,12 +54,12 @@ describe('docs/openapi.json', () => {
     }
   });
 
-  it('keeps the accessToken scheme apart from the deviceToken scheme', async () => {
+  it('secures the SOS routes and the authenticated auth routes with the access token', async () => {
     const doc = await committed();
-    expect(Object.keys(doc.components.securitySchemes).sort()).toEqual(['accessToken', 'deviceToken']);
     expect(doc.paths['/v1/me']?.get?.security).toEqual([{ accessToken: [] }]);
     expect(doc.paths['/v1/auth/signout']?.post?.security).toEqual([{ accessToken: [] }]);
-    expect(doc.paths['/v1/sos']?.post?.security).toEqual([{ deviceToken: [] }]);
+    expect(doc.paths['/v1/sos']?.post?.security).toEqual([{ accessToken: [] }]);
+    expect(doc.paths['/v1/sos/{receiptId}/status']?.get?.security).toEqual([{ accessToken: [] }]);
   });
 
   it('leaves the SOS operations out of the auth tag', async () => {
@@ -73,21 +68,6 @@ describe('docs/openapi.json', () => {
       const op = doc.paths[path]?.[method];
       expect(op, `${method.toUpperCase()} ${path}`).toBeDefined();
       expect(op?.tags ?? []).not.toContain('auth');
-    }
-  });
-
-  it('is the document without auth routes when auth is disabled', async () => {
-    const base = testConfig();
-    const app = await buildPublicApp(
-      createTestContext({ config: { ...base, auth: { ...base.auth, enabled: false } } }),
-    );
-    try {
-      const res = await app.inject({ method: 'GET', url: '/v1/openapi.json' });
-      const doc = res.json() as Doc;
-      for (const [, path] of AUTH_OPERATIONS) expect(doc.paths[path]).toBeUndefined();
-      expect(Object.keys(doc.components.securitySchemes)).toEqual(['deviceToken']);
-    } finally {
-      await app.close();
     }
   });
 });

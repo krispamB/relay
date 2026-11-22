@@ -41,7 +41,6 @@ vi.mock('../../src/auth/routes/refresh.js', async () => {
       app.get('/v1/auth/_throw/:name', async (req) => {
         const { name } = req.params as { name: string };
         const make: Record<string, () => Error> = {
-          email_taken: () => authErrors.emailTaken(),
           phone_taken: () => authErrors.phoneTaken(),
           idempotency_key_reused: () => authErrors.idempotencyKeyReused(),
           invalid_refresh_token: () => authErrors.invalidRefreshToken(),
@@ -74,8 +73,6 @@ vi.mock('../../src/auth/routes/signout.js', async () => {
 vi.mock('../../src/auth/routes/me.js', () => ({ meRoutes: async () => {} }));
 vi.mock('../../src/auth/routes/signin.js', () => ({ signinRoutes: async () => {} }));
 
-const AUTH_ON = { enabled: true, tokenSecret: 'auth-token-secret-for-tests-0123456789ab' };
-
 beforeEach(() => resetDb());
 afterAll(() => closeTestDb());
 
@@ -84,11 +81,10 @@ afterEach(async () => {
   for (const app of open.splice(0)) await app.close();
 });
 
-async function setup(opts: { auth?: boolean; perIp?: number } = {}) {
+async function setup(opts: { perIp?: number } = {}) {
   const base = testConfig();
   const config = {
     ...base,
-    auth: opts.auth === false ? { ...base.auth, enabled: false } : AUTH_ON,
     limits: { ...base.limits, ...(opts.perIp === undefined ? {} : { requestsPerIpPerMinute: opts.perIp }) },
   };
   const ctx = createTestContext({ config });
@@ -100,7 +96,6 @@ async function setup(opts: { auth?: boolean; perIp?: number } = {}) {
 const validBody = () => ({
   fullName: 'Ada Okafor',
   phone: '+2348031234567',
-  email: 'ADA@example.com',
   password: 'correct horse battery staple',
   device: { platform: 'ios', appVersion: '0.3.0', installId: '5b0c1f7e-2a3d-4e8f-9c6b-1a2d3e4f5a6b' },
 });
@@ -125,38 +120,13 @@ const post = (
     payload: typeof payload === 'string' ? payload : JSON.stringify(payload),
   });
 
-describe('auth disabled (the default)', () => {
-  it.each([
-    ['POST', '/v1/auth/signup'],
-    ['POST', '/v1/auth/refresh'],
-    ['POST', '/v1/auth/signout'],
-    ['GET', '/v1/auth/anything'],
-  ])('%s %s is the relay 404', async (method, url) => {
-    const { app } = await setup({ auth: false });
-    const res = await app.inject({
-      method: method as 'GET' | 'POST',
-      url,
-      payload: method === 'POST' ? {} : undefined,
-    });
-    expect(res.statusCode).toBe(404);
-    expect(res.json()).toEqual({ error: { code: 'not_found', message: 'Not found.' } });
-  });
-
-  it('keeps the relay error handling for the SOS routes', async () => {
-    const { app } = await setup({ auth: false });
-    const res = await post(app, '/v1/devices/register', '{');
-    expect(res.statusCode).toBe(400);
-    expect(res.json().error.code).toBe('invalid_request');
-  });
-});
-
-describe('auth enabled', () => {
+describe('the auth plugin', () => {
   it('serves the routes the plugin mounts, with the contract content type', async () => {
     const { app } = await setup();
     const res = await post(app, '/v1/auth/signup', validBody());
     expect(res.statusCode).toBe(201);
     expect(res.headers['content-type']).toBe('application/json; charset=utf-8');
-    expect(res.json().email).toBe('ada@example.com');
+    expect(res.json().phone).toBe('+2348031234567');
   });
 
   it('answers an unknown /v1/auth path with the relay 404 (not an auth code)', async () => {
@@ -174,9 +144,9 @@ describe('auth enabled', () => {
 
   it('keeps the relay error body on the SOS routes outside the plugin', async () => {
     const { app } = await setup();
-    const res = await post(app, '/v1/devices/register', '{');
-    expect(res.statusCode).toBe(400);
-    expect(res.json().error.code).toBe('invalid_request');
+    const res = await app.inject({ method: 'GET', url: '/v1/intake/NO-SUCH-INTAKE' });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: { code: 'not_found', message: 'Not found.' } });
   });
 
   it('does not run Fastify body schema validation on its routes', async () => {
@@ -196,14 +166,13 @@ describe('auth enabled', () => {
     const op = doc.paths['/v1/auth/_documented']?.post;
     expect(op?.tags).toEqual(['auth']);
     expect(op?.security).toEqual([{ accessToken: [] }]);
-    expect(doc.components.securitySchemes).toMatchObject({
-      deviceToken: { type: 'http', scheme: 'bearer' },
-      accessToken: { type: 'http', scheme: 'bearer' },
+    expect(doc.components.securitySchemes).toEqual({
+      accessToken: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
     });
   });
 });
 
-describe('auth enabled: malformed requests', () => {
+describe('the auth plugin: malformed requests', () => {
   it.each([
     ['invalid JSON', '{', 'application/json'],
     ['truncated JSON', '{"fullName":"Ada"', 'application/json'],
@@ -235,7 +204,7 @@ describe('auth enabled: malformed requests', () => {
   });
 });
 
-describe('auth enabled: validation_failed over HTTP', () => {
+describe('the auth plugin: validation_failed over HTTP', () => {
   it('lists every invalid field in the contract body', async () => {
     const { app } = await setup();
     const res = await post(app, '/v1/auth/signup', {
@@ -276,7 +245,7 @@ describe('auth enabled: validation_failed over HTTP', () => {
   });
 });
 
-describe('auth enabled: body size', () => {
+describe('the auth plugin: body size', () => {
   it('16 385 bytes → 413 payload_too_large', async () => {
     const { app } = await setup();
     const body = jsonOfSize(16_385);
@@ -303,9 +272,8 @@ describe('auth enabled: body size', () => {
   });
 });
 
-describe('auth enabled: the plugin error handler', () => {
+describe('the auth plugin: the plugin error handler', () => {
   it.each([
-    ['email_taken', 409],
     ['phone_taken', 409],
     ['idempotency_key_reused', 422],
     ['invalid_refresh_token', 401],

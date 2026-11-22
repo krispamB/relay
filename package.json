@@ -3,7 +3,6 @@
   "version": "0.1.0",
   "scripts": {
     "test": "vitest run",
-    "test:auth-on": "TEST_AUTH_ENABLED=true vitest run",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/src/main.js",
     "dev": "tsx watch src/main.ts",
@@ -29,9 +28,7 @@
     "@fastify/type-provider-typebox": "^6.3.0",
     "@node-rs/argon2": "^2.2.2",
     "@sinclair/typebox": "^0.34.52",
-    "cbor-x": "^1.6.9",
     "fastify": "^5.12.8",
-    "google-auth-library": "^11.3.4",
     "kysely": "^0.29.9",
     "libphonenumber-js": "^1.13.16",
     "pg": "^8.23.1",
@@ -42,7 +39,6 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.8",
-    "@peculiar/x509": "^2.2.0",
     "@testcontainers/postgresql": "^12.2.1",
     "@types/node": "^22.20.5",
     "@types/pg": "^8.23.1",

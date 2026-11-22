@@ -40,7 +40,7 @@ async function setup() {
     metrics,
     config: {
       ...base,
-      auth: { enabled: true, tokenSecret: SECRET },
+      auth: { tokenSecret: SECRET },
       limits: { ...base.limits, requestsPerIpPerMinute: 10_000 },
     },
   });
@@ -60,7 +60,6 @@ async function insertUser(ctx: TestContext) {
       id,
       full_name: 'Ada Okafor',
       phone: `+234803${String(userSeq).padStart(7, '0')}`,
-      email: `metrics${userSeq}@example.com`,
       password_hash: '$argon2id$stub',
       created_at: now,
       updated_at: now,
@@ -77,7 +76,6 @@ async function signIn(ctx: TestContext) {
 const signupBody = (n: number) => ({
   fullName: 'Ada Okafor',
   phone: `+234803123${String(n).padStart(4, '0')}`,
-  email: `signup${n}@example.com`,
   password: 'correct horse battery staple',
   device,
 });

@@ -25,7 +25,6 @@ export class ApiError extends Error {
 
 export const errors = {
   badRequest: (code: string, message: string) => new ApiError(400, code, message),
-  unauthorized: () => new ApiError(401, 'unauthorized', 'Device token is missing, invalid or expired.'),
   /** A 403 never says why (PRD §7). The reason goes to the log only. */
   forbidden: () => new ApiError(403, 'forbidden', 'This request is not allowed.'),
   notFound: () => new ApiError(404, 'not_found', 'Not found.'),

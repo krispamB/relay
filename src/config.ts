@@ -1,12 +1,9 @@
 /** Environment configuration. See sos-relay-PRD.md §13.1. Fails fast with every problem listed. */
 
-export type AttestationMode = 'enforce' | 'permissive';
-
 export interface Limits {
-  sosPerDevicePer24h: number;
+  sosPerUserPer24h: number;
   sosPerPhonePer24h: number;
   sosPerIpPerHour: number;
-  registrationsPerIpPerHour: number;
   intakeBreakerCount: number;
   intakeBreakerWindowS: number;
   statusPollMinIntervalS: number;
@@ -39,23 +36,14 @@ export interface Config {
   intakesFile: string | undefined;
   /** The intakes JSON inline, for platforms without a writable file system (Railway). */
   intakesJson: string | undefined;
-  attestation: {
-    mode: AttestationMode;
-    androidPackageName: string | undefined;
-    androidCertSha256: string[];
-    googleServiceAccountJson: string | undefined;
-    iosTeamId: string | undefined;
-    iosBundleId: string | undefined;
-    iosAppAttestEnv: 'production' | 'development';
-  };
-  statusTokenSecret: string;
   phoneHashSecret: string;
-  /** Sign-up, sign-in and the session. Off by default: no auth route is mounted. */
+  /** Sign-up, sign-in and the session. Always on: the SOS routes need the signed-in user. */
   auth: {
-    enabled: boolean;
-    /** At least 32 bytes when enabled; '' when disabled. */
+    /** At least 32 bytes. Signs access tokens and derives the other auth keys. */
     tokenSecret: string;
   };
+  /** The Nature of every SOS call sent to Core (docs/live-sos-plan.md §3.2, D6). */
+  sosNatureText: string;
   adminToken: string;
   alertWebhookUrl: string | undefined;
   demoDispatchAfterS: number;
@@ -64,10 +52,9 @@ export interface Config {
 }
 
 export const DEFAULT_LIMITS: Limits = {
-  sosPerDevicePer24h: 3,
+  sosPerUserPer24h: 3,
   sosPerPhonePer24h: 3,
   sosPerIpPerHour: 10,
-  registrationsPerIpPerHour: 10,
   intakeBreakerCount: 30,
   intakeBreakerWindowS: 600,
   statusPollMinIntervalS: 5,
@@ -80,10 +67,9 @@ export const DEFAULT_LIMITS: Limits = {
 };
 
 const LIMIT_ENV: Record<keyof Limits, string> = {
-  sosPerDevicePer24h: 'LIMIT_SOS_PER_DEVICE_PER_24H',
+  sosPerUserPer24h: 'LIMIT_SOS_PER_USER_PER_24H',
   sosPerPhonePer24h: 'LIMIT_SOS_PER_PHONE_PER_24H',
   sosPerIpPerHour: 'LIMIT_SOS_PER_IP_PER_HOUR',
-  registrationsPerIpPerHour: 'LIMIT_REGISTRATIONS_PER_IP_PER_HOUR',
   intakeBreakerCount: 'LIMIT_INTAKE_BREAKER_COUNT',
   intakeBreakerWindowS: 'LIMIT_INTAKE_BREAKER_WINDOW_S',
   statusPollMinIntervalS: 'LIMIT_STATUS_POLL_MIN_INTERVAL_S',
@@ -94,6 +80,11 @@ const LIMIT_ENV: Record<keyof Limits, string> = {
   queueDepthWarn: 'QUEUE_DEPTH_WARN',
   oldestQueuedWarnS: 'OLDEST_QUEUED_WARN_S',
 };
+
+/** The recording carries what happened; the dispatcher sees this until it is attached. */
+export const DEFAULT_SOS_NATURE_TEXT = 'SOS – caller recording to follow';
+/** Upper bound on SOS_NATURE_TEXT, in characters. */
+export const MAX_SOS_NATURE_TEXT = 200;
 
 export class ConfigError extends Error {
   constructor(public readonly problems: string[]) {
@@ -158,50 +149,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const priorityId = Number(priorityRaw);
   if (priorityRaw && !Number.isInteger(priorityId)) problems.push('RESGRID_PRIORITY_ID must be an integer');
 
-  const modeRaw = get('ATTESTATION_MODE') ?? 'enforce';
-  if (modeRaw !== 'enforce' && modeRaw !== 'permissive') {
-    problems.push('ATTESTATION_MODE must be "enforce" or "permissive"');
-  }
-  const mode = (modeRaw === 'permissive' ? 'permissive' : 'enforce') as AttestationMode;
-  if (mode === 'permissive' && nodeEnv === 'production' && !bool('ALLOW_PERMISSIVE_IN_PRODUCTION', false)) {
-    problems.push(
-      'ATTESTATION_MODE=permissive is refused when NODE_ENV=production (set ALLOW_PERMISSIVE_IN_PRODUCTION=true to override)',
-    );
-  }
-
-  const attestation: Config['attestation'] = {
-    mode,
-    androidPackageName: get('ANDROID_PACKAGE_NAME'),
-    androidCertSha256: (get('ANDROID_CERT_SHA256') ?? '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean),
-    googleServiceAccountJson: get('GOOGLE_SERVICE_ACCOUNT_JSON'),
-    iosTeamId: get('IOS_TEAM_ID'),
-    iosBundleId: get('IOS_BUNDLE_ID'),
-    iosAppAttestEnv: get('IOS_APP_ATTEST_ENV') === 'development' ? 'development' : 'production',
-  };
-  if (mode === 'enforce') {
-    // In enforce mode a platform with missing config simply cannot attest; require at least one platform.
-    const android =
-      attestation.androidPackageName &&
-      attestation.androidCertSha256.length > 0 &&
-      attestation.googleServiceAccountJson;
-    const ios = attestation.iosTeamId && attestation.iosBundleId;
-    if (!android && !ios) {
-      problems.push(
-        'ATTESTATION_MODE=enforce needs Android (ANDROID_PACKAGE_NAME, ANDROID_CERT_SHA256, GOOGLE_SERVICE_ACCOUNT_JSON) or iOS (IOS_TEAM_ID, IOS_BUNDLE_ID) settings',
-      );
-    }
-  }
-  if (attestation.googleServiceAccountJson) {
-    try {
-      JSON.parse(attestation.googleServiceAccountJson);
-    } catch {
-      problems.push('GOOGLE_SERVICE_ACCOUNT_JSON must be valid JSON');
-    }
-  }
-
   const limits = { ...DEFAULT_LIMITS };
   for (const key of Object.keys(LIMIT_ENV) as (keyof Limits)[]) {
     limits[key] = int(LIMIT_ENV[key], DEFAULT_LIMITS[key]);
@@ -212,7 +159,12 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     problems.push('ALERT_WEBHOOK_URL must be an http(s) URL');
   }
 
-  const authEnabled = bool('AUTH_ENABLED', false);
+  const sosNatureText = get('SOS_NATURE_TEXT') ?? DEFAULT_SOS_NATURE_TEXT;
+  if ([...sosNatureText].length > MAX_SOS_NATURE_TEXT || /\p{Cc}/u.test(sosNatureText)) {
+    problems.push(
+      `SOS_NATURE_TEXT must be at most ${MAX_SOS_NATURE_TEXT} characters, with no control characters`,
+    );
+  }
 
   const config: Config = {
     nodeEnv,
@@ -232,11 +184,10 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     },
     intakesFile: get('INTAKES_FILE'),
     intakesJson: get('INTAKES_JSON'),
-    attestation,
-    statusTokenSecret: secret('STATUS_TOKEN_SECRET'),
     phoneHashSecret: secret('PHONE_HASH_SECRET'),
     adminToken: secret('ADMIN_TOKEN'),
-    auth: { enabled: authEnabled, tokenSecret: authEnabled ? secret('AUTH_TOKEN_SECRET') : '' },
+    auth: { tokenSecret: secret('AUTH_TOKEN_SECRET') },
+    sosNatureText,
     alertWebhookUrl,
     demoDispatchAfterS: int('DEMO_DISPATCH_AFTER_S', 30, 1),
     demoCloseAfterS: int('DEMO_CLOSE_AFTER_S', 90, 1),

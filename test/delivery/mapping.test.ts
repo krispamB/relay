@@ -17,10 +17,9 @@ function sub(overrides: Partial<MappingSubmission> = {}): MappingSubmission {
   return {
     id: 'sos_01JCQ8Z3M5V7T9W2X4Y6A8B0CD',
     reference: 'SOS-7KQ2',
-    nature_label: 'Medical emergency',
-    details: null,
+    nature_label: 'SOS – caller recording to follow',
     phone: '+2348012345678',
-    name: null,
+    contact_name: null,
     lat: null,
     lon: null,
     accuracy_m: null,
@@ -77,29 +76,29 @@ describe('note block (PRD §8.2)', () => {
 });
 
 describe('buildSaveCallInput (PRD §8.2)', () => {
-  it('maps a full submission', () => {
+  it('maps a full submission: fixed Name, the relay nature, the account name and phone', () => {
     const input = buildSaveCallInput(
-      sub({ ...withLocation, address: '12 Marina Rd', name: 'Ade', details: 'Man collapsed, not breathing' }),
+      sub({ ...withLocation, address: '12 Marina Rd', contact_name: 'Ade Okafor' }),
       resgrid,
       noPolicy,
     );
     expect(input).toEqual({
       Priority: 3,
       Type: 'Public SOS',
-      Name: '[PUBLIC SOS] Medical emergency',
-      Nature: 'Medical emergency. Man collapsed, not breathing',
+      Name: '[PUBLIC SOS] SOS',
+      Nature: 'SOS – caller recording to follow',
       Geolocation: '6.524400,3.379200',
       Address: '12 Marina Rd',
-      ContactName: 'Ade',
+      ContactName: 'Ade Okafor',
       ContactInfo: '+2348012345678',
       ExternalId: 'sos_01JCQ8Z3M5V7T9W2X4Y6A8B0CD',
       ReferenceId: 'SOS-7KQ2',
       Note: expect.stringContaining('Public SOS submission'),
     });
   });
-  it('omits location, address, name and details when not given', () => {
+  it('omits location, address and name when not given', () => {
     const input = buildSaveCallInput(sub({ address: 'Somewhere' }), resgrid, noPolicy);
-    expect(input.Nature).toBe('Medical emergency');
+    expect(input.Nature).toBe('SOS – caller recording to follow');
     expect(input).not.toHaveProperty('Geolocation');
     expect(input).not.toHaveProperty('ContactName');
     const body = buildSaveCallBody(input);
@@ -112,10 +111,10 @@ describe('buildSaveCallInput (PRD §8.2)', () => {
     expect(formatGeolocation(null, 3)).toBeUndefined();
     expect(formatGeolocation(6.5, 3.25)).toBe('6.500000,3.250000');
   });
-  it('cuts Name to 100 characters', () => {
+  it('keeps Name fixed whatever the nature text', () => {
     const input = buildSaveCallInput(sub({ nature_label: 'X'.repeat(200) }), resgrid, noPolicy);
-    expect(input.Name).toHaveLength(100);
-    expect(input.Name.startsWith('[PUBLIC SOS] XXX')).toBe(true);
+    expect(input.Name).toBe('[PUBLIC SOS] SOS');
+    expect(input.Nature).toBe('X'.repeat(200));
   });
   it('sends "See map location" when the policy requires an address and only GPS was sent', () => {
     const input = buildSaveCallInput(sub(withLocation), resgrid, {
@@ -145,7 +144,7 @@ describe('buildSaveCallInput (PRD §8.2)', () => {
         .ContactName,
     ).toBe(PLACEHOLDER_NAME);
     expect(
-      buildSaveCallInput(sub({ address: 'a', name: 'Ade' }), resgrid, {
+      buildSaveCallInput(sub({ address: 'a', contact_name: 'Ade' }), resgrid, {
         requiredAddress: false,
         requiredName: true,
       }).ContactName,

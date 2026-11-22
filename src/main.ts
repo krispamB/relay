@@ -1,7 +1,6 @@
 import { buildAdminApp } from './admin/app.js';
 import { createWebhookAlerter } from './alerts/webhook.js';
 import { buildPublicApp } from './app.js';
-import { createAttestationService } from './attestation/service.js';
 import { systemClock } from './clock.js';
 import { ConfigError, loadConfig } from './config.js';
 import type { AppContext } from './context.js';
@@ -46,13 +45,9 @@ async function main(): Promise<void> {
       { apiBase: config.resgrid.apiBase, apiKey: config.resgrid.apiKey },
       { log, metrics, clock },
     ),
-    attestation: createAttestationService(config.attestation, { clock, log, metrics }),
   };
 
   if (!config.alertWebhookUrl) log.warn('ALERT_WEBHOOK_URL is not set: alerts will be logged only');
-  if (config.attestation.mode === 'permissive') {
-    log.warn('ATTESTATION_MODE=permissive: requests are accepted without verified attestation');
-  }
 
   const publicApp = await buildPublicApp(ctx);
   const adminApp = await buildAdminApp(ctx);

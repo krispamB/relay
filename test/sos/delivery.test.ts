@@ -13,12 +13,11 @@ import {
 import { validateContent, validateStatic } from '../../src/sos/validate.js';
 import { getSubmission, ok, scriptedCore } from '../delivery/fixtures.js';
 import { closeTestDb, resetDb, TEST_INTAKE_CODE, unusedCore } from '../helpers/context.js';
-import { seedDevice } from '../helpers/seed.js';
+import { seedUser } from '../helpers/seed.js';
 import {
   ADDRESS,
+  caller,
   capturingLogger,
-  DETAILS,
-  device,
   type Harness,
   harness,
   LAT,
@@ -49,23 +48,23 @@ describe('concurrency (PRD §8.3, AC3, AC7)', () => {
       return ok();
     });
     h = await harness({ core });
-    const d = await device(h);
+    const d = await caller(h);
     const key = randomUUID();
     const payload = JSON.stringify(sosBody(h.ctx));
+    const token = d.token();
     const results = await Promise.all(
-      Array.from({ length: 6 }, () => postSos(h!.app, { token: d.token, key, payload })),
+      Array.from({ length: 6 }, () => postSos(h!.app, { token, key, payload })),
     );
     for (const r of results) expect([201, 202]).toContain(r.status);
     expect(new Set(results.map((r) => r.body.receiptId)).size).toBe(1);
-    expect(new Set(results.map((r) => r.body.statusToken)).size).toBe(1);
     expect(await submissionCount(h)).toBe(1);
     expect(core.calls).toHaveLength(1);
   });
 
-  it('concurrent different SOS from one device: one is accepted, the rest get 409 with its receipt', async () => {
+  it('concurrent different SOS from one user: one is accepted, the rest get 409 with its receipt', async () => {
     const core = scriptedCore(ok());
     h = await harness({ core });
-    const d = await device(h);
+    const d = await caller(h);
     const results = await Promise.all(Array.from({ length: 5 }, () => d.send()));
     const accepted = results.filter((r) => r.status === 201);
     expect(accepted).toHaveLength(1);
@@ -96,10 +95,10 @@ describe('concurrency (PRD §8.3, AC3, AC7)', () => {
   ])('a lost insert race: %s', async (_n, sameKey, expected) => {
     h = await harness();
     const ctx = h.ctx;
-    const { device: dev } = await seedDevice(ctx);
+    const { user } = await seedUser(ctx, { phone: PHONE });
     const intake = ctx.intakes.get(TEST_INTAKE_CODE)!;
     const key = randomUUID();
-    const content = validateContent(validateStatic(sosBody(ctx) as never), intake, ctx.clock.now(), {
+    const content = validateContent(validateStatic(sosBody(ctx) as never), ctx.clock.now(), {
       requiredLocation: false,
     });
     const now = ctx.clock.now();
@@ -117,13 +116,12 @@ describe('concurrency (PRD §8.3, AC3, AC7)', () => {
         .insertInto('submissions')
         .values({
           id: 'sos_01JCQ8Z3M5V7T9W2X4Y6A8B0CD',
-          device_id: dev.id,
+          user_id: user.id,
           idempotency_key: sameKey ? key : randomUUID(),
           intake_code: TEST_INTAKE_CODE,
           reference: 'SOS-WWWW',
           status: 'queued',
-          nature_id: 'fire',
-          nature_label: 'Fire',
+          nature_label: 'SOS',
           phone: PHONE,
           phone_hash: 'x',
           ip: '1',
@@ -136,11 +134,13 @@ describe('concurrency (PRD §8.3, AC3, AC7)', () => {
     });
     await didInsert;
     const loser = persistSubmission(ctx, {
-      device: dev,
+      userId: user.id,
+      phone: PHONE,
+      phoneHash: phoneHash(ctx.config.phoneHashSecret, PHONE),
       idempotencyKey: key,
       intake,
       content,
-      phoneHash: phoneHash(ctx.config.phoneHashSecret, PHONE),
+      natureLabel: ctx.config.sosNatureText,
       ip: '203.0.113.7',
     });
     // Let the loser reach the insert and block on the index, then commit the winner.
@@ -160,7 +160,7 @@ describe('time budget (PRD §8.1, AC2)', () => {
   it('gives Core at most 6 s of a 7.5 s budget by default', async () => {
     const core = slowCore(0);
     h = await harness({ core });
-    expect((await (await device(h)).send()).status).toBe(201);
+    expect((await (await caller(h)).send()).status).toBe(201);
     const t = core.calls[0]!.timeoutMs!;
     expect(t).toBeLessThanOrEqual(6000);
     expect(t).toBeGreaterThan(5000);
@@ -171,7 +171,7 @@ describe('time budget (PRD §8.1, AC2)', () => {
     setSosBudget({ totalMs: 375, maxInlineMs: 300, reserveMs: 15, minInlineMs: 25 });
     const core = slowCore(5000);
     h = await harness({ core });
-    const d = await device(h);
+    const d = await caller(h);
     const started = performance.now();
     const res = await d.send();
     const elapsed = performance.now() - started;
@@ -187,7 +187,7 @@ describe('time budget (PRD §8.1, AC2)', () => {
   it('with almost nothing left, skips the inline attempt, answers 202 and leaves the row due now', async () => {
     setSosBudget({ totalMs: 0 });
     h = await harness({ core: unusedCore() });
-    const res = await (await device(h)).send();
+    const res = await (await caller(h)).send();
     expect(res.status).toBe(202);
     const row = await getSubmission(h.ctx.db, res.body.receiptId);
     expect(row).toMatchObject({ status: 'queued', attempts: 0 });
@@ -203,15 +203,16 @@ describe('logs (PRD §10.4, AC15)', () => {
       core: scriptedCore(ok(), { kind: 'rejected', httpStatus: 400, message: `bad ${PHONE}` }),
     });
     const body = sosBody(h.ctx, { address: ADDRESS });
-    const d = await device(h);
+    const d = await caller(h, { phone: PHONE });
+    const token = d.token();
     const key = randomUUID();
-    const first = await postSos(h.app, { token: d.token, key, body });
+    const first = await postSos(h.app, { token, key, body });
     expect(first.status).toBe(201);
-    await postSos(h.app, { token: d.token, key, body }); // replay
-    await postSos(h.app, { token: d.token, body }); // 409
-    await postSos(h.app, { token: d.token, body: { ...body, extra: DETAILS } }); // 400
-    await postSos(h.app, { token: d.token, body: { ...body, phone: '+2348012345' } }); // 400
-    const d2 = await device(h);
+    await postSos(h.app, { token, key, body }); // replay
+    await postSos(h.app, { token, body }); // 409
+    await postSos(h.app, { token, body: { ...body, extra: 'generator shed' } }); // 400
+    await postSos(h.app, { token, body: { ...body, phone: '+2348012345' } }); // 400
+    const d2 = await caller(h);
     expect((await d2.send({ address: ADDRESS })).body.status).toBe('failed'); // Core rejected, alert raised
 
     const out = lines.join('\n');
@@ -222,14 +223,13 @@ describe('logs (PRD §10.4, AC15)', () => {
       '8012345678',
       NAME,
       'Okonkwo',
-      DETAILS,
       'generator shed',
       ADDRESS,
       'Marina Road',
       String(LAT),
       String(LON),
-      first.body.statusToken,
-      d.token,
+      token,
+      d2.user.phone,
     ]) {
       expect(out).not.toContain(secret);
     }

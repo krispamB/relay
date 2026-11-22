@@ -39,7 +39,7 @@ async function setup() {
     clock,
     config: {
       ...base,
-      auth: { enabled: true, tokenSecret: SECRET },
+      auth: { tokenSecret: SECRET },
       limits: { ...base.limits, requestsPerIpPerMinute: 10_000 },
     },
   });
@@ -57,7 +57,6 @@ async function insertUser(id: string) {
       id,
       full_name: 'Ada Okafor',
       phone: `+2348${String(seq).padStart(9, '0')}`,
-      email: `${id}@example.com`,
       password_hash: '$argon2id$stub',
       created_at: now,
       updated_at: now,

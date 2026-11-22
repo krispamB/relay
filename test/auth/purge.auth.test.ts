@@ -28,7 +28,6 @@ async function insertUser(ctx: TestContext, id: string) {
       id,
       full_name: 'Ada Okafor',
       phone: `+234803${String(seq).padStart(7, '0')}`,
-      email: `${id}@example.com`,
       password_hash: 'hash',
       created_at: now,
       updated_at: now,
@@ -270,17 +269,17 @@ describe('auth purge (contract §8)', () => {
     await ctx.db
       .insertInto('signin_attempts')
       .values([
-        { email_hash: 'past', created_at: ago(now, HOUR + SECOND) },
-        { email_hash: 'exact', created_at: ago(now, HOUR) },
-        { email_hash: 'inside', created_at: ago(now, HOUR - SECOND) },
+        { phone_hash: 'past', created_at: ago(now, HOUR + SECOND) },
+        { phone_hash: 'exact', created_at: ago(now, HOUR) },
+        { phone_hash: 'inside', created_at: ago(now, HOUR - SECOND) },
       ])
       .execute();
 
     const counts = await runPurgePass(ctx);
     expect(counts.signinAttempts).toBe(1);
     expect(
-      (await ctx.db.selectFrom('signin_attempts').select('email_hash').orderBy('email_hash').execute()).map(
-        (r) => r.email_hash,
+      (await ctx.db.selectFrom('signin_attempts').select('phone_hash').orderBy('phone_hash').execute()).map(
+        (r) => r.phone_hash,
       ),
     ).toEqual(['exact', 'inside']);
   });

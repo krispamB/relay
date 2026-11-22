@@ -2,7 +2,7 @@ import { createHmac, hkdfSync } from 'node:crypto';
 
 /**
  * The keys derived from AUTH_TOKEN_SECRET. Each is used for one purpose only.
- * `signinEmail` is a fourth key, not `PHONE_HASH_SECRET`: sign-in attempt rows are an auth rate
+ * `signinPhone` is a fourth key, not `PHONE_HASH_SECRET`: sign-in attempt rows are an auth rate
  * limit, so they must not be keyed by the SOS phone-hash secret, and a distinct HKDF label means
  * this key says nothing about the other three.
  */
@@ -13,8 +13,8 @@ export interface AuthKeys {
   refresh: Buffer;
   /** Keyed hash of a sign-up request body, for idempotent replays. */
   signupBody: Buffer;
-  /** HMAC key for the per-email sign-in rate limit. The address itself is never stored. */
-  signinEmail: Buffer;
+  /** HMAC key for the per-phone sign-in rate limit. The number itself is never stored. */
+  signinPhone: Buffer;
 }
 
 const SALT = 'sos-relay/auth/v1';
@@ -34,14 +34,14 @@ export function deriveAuthKeys(secret: string): AuthKeys {
     access: derive(secret, 'access-token-signing'),
     refresh: derive(secret, 'refresh-token-derivation'),
     signupBody: derive(secret, 'signup-body-hashing'),
-    signinEmail: derive(secret, 'signin-email-hash'),
+    signinPhone: derive(secret, 'signin-phone-hash'),
   };
 }
 
 /**
- * Hex HMAC of a lowercased email for `signin_attempts.email_hash`. The `signin-email:` prefix keeps
- * this input distinct from any other use of the key.
+ * Hex HMAC of a phone number (as sent, trimmed) for `signin_attempts.phone_hash`. The `signin-phone:`
+ * prefix keeps this input distinct from any other use of the key.
  */
-export function signinEmailHash(key: Buffer, email: string): string {
-  return createHmac('sha256', key).update(`signin-email:${email}`).digest('hex');
+export function signinPhoneHash(key: Buffer, phone: string): string {
+  return createHmac('sha256', key).update(`signin-phone:${phone}`).digest('hex');
 }

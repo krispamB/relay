@@ -1,19 +1,19 @@
 /**
  * POST /v1/auth/signin (docs/auth-contract.md §6).
  *
- * Order: validate, per-IP limit (in memory, 20/hour), per-email limit (Postgres, 10/hour, so it holds
+ * Order: validate, per-IP limit (in memory, 20/hour), per-phone limit (Postgres, 10/hour, so it holds
  * across instances and restarts), then the credential check. A 400 is not an attempt. A request a
- * limit refuses is not recorded, so retrying cannot stretch the lock-out. The email limit counts
- * every other validated attempt, success and failure alike, under an advisory lock per email hash.
+ * limit refuses is not recorded, so retrying cannot stretch the lock-out. The phone limit counts
+ * every other validated attempt, success and failure alike, under an advisory lock per phone hash.
  *
- * Unknown email and wrong password are the same 401. The unknown path still runs one Argon2id
+ * Unknown phone and wrong password are the same 401. The unknown path still runs one Argon2id
  * verification against a dummy hash created once, when this route is first registered, so the two
  * paths cost the same. A password longer than SIGNIN_PASSWORD_MAX_CHARS skips that verification
  * (it cannot match an account, and hashing it would be a CPU sink); both the known and unknown
- * paths skip it, so the skip itself does not say whether the email exists.
+ * paths skip it, so the skip itself does not say whether the phone has an account.
  *
- * The per-email key is `signinEmail` from AUTH_TOKEN_SECRET (src/auth/keys.ts), not PHONE_HASH_SECRET.
- * Logs name the user id on success only. Never the email or the password.
+ * The per-phone key is `signinPhone` from AUTH_TOKEN_SECRET (src/auth/keys.ts), not PHONE_HASH_SECRET.
+ * Logs name the user id on success only. Never the phone or the password.
  */
 import { randomBytes } from 'node:crypto';
 import { Type } from '@sinclair/typebox';
@@ -24,14 +24,14 @@ import type { AppContext } from '../../context.js';
 import type { User } from '../../db/types.js';
 import { METRICS } from '../../metrics.js';
 import { authErrors } from '../errors.js';
-import { deriveAuthKeys, signinEmailHash } from '../keys.js';
+import { deriveAuthKeys, signinPhoneHash } from '../keys.js';
 import { hashPassword, verifyPassword } from '../password.js';
 import { issueSession, rfc3339, type Session } from '../sessions.js';
 import { characterLength, SIGNIN_PASSWORD_MAX_CHARS, type SigninInput, validateSignin } from '../validate.js';
 
 /** Contract §6. */
 export const SIGNIN_PER_IP_PER_HOUR = 20;
-export const SIGNIN_PER_EMAIL_PER_HOUR = 10;
+export const SIGNIN_PER_PHONE_PER_HOUR = 10;
 
 /** One Argon2id hash of a random password, shared by every registration of this route in the process. */
 let dummyPasswordHash: Promise<string> | undefined;
@@ -45,7 +45,6 @@ interface UserBody {
   id: string;
   fullName: string;
   phone: string;
-  email: string;
   phoneVerified: boolean;
   createdAt: string;
 }
@@ -54,48 +53,47 @@ const userBody = (u: User): UserBody => ({
   id: u.id,
   fullName: u.full_name,
   phone: u.phone,
-  email: u.email,
   phoneVerified: false,
   createdAt: rfc3339(u.created_at),
 });
 
 /**
- * Counts this email's attempts in the last hour and records one, or returns the seconds until the
+ * Counts this phone's attempts in the last hour and records one, or returns the seconds until the
  * oldest counted attempt leaves the window. One transaction under an advisory lock, so concurrent
  * requests cannot both read "9" and both pass.
  */
-async function emailAttemptRetrySeconds(ctx: AppContext, emailHash: string, now: Date): Promise<number> {
+async function phoneAttemptRetrySeconds(ctx: AppContext, phoneHash: string, now: Date): Promise<number> {
   const since = addMs(now, -HOUR);
   return ctx.db.transaction().execute(async (trx) => {
-    await sql`SELECT pg_advisory_xact_lock(hashtext(${`signin-email:${emailHash}`}))`.execute(trx);
+    await sql`SELECT pg_advisory_xact_lock(hashtext(${`signin-phone:${phoneHash}`}))`.execute(trx);
     const recent = await trx
       .selectFrom('signin_attempts')
       .select('created_at')
-      .where('email_hash', '=', emailHash)
+      .where('phone_hash', '=', phoneHash)
       .where('created_at', '>', since)
       .orderBy('created_at', 'asc')
       .execute();
-    if (recent.length >= SIGNIN_PER_EMAIL_PER_HOUR) {
-      const leaving = recent[recent.length - SIGNIN_PER_EMAIL_PER_HOUR]!.created_at;
+    if (recent.length >= SIGNIN_PER_PHONE_PER_HOUR) {
+      const leaving = recent[recent.length - SIGNIN_PER_PHONE_PER_HOUR]!.created_at;
       return (leaving.getTime() + HOUR - now.getTime()) / 1000;
     }
-    await trx.insertInto('signin_attempts').values({ email_hash: emailHash, created_at: now }).execute();
+    await trx.insertInto('signin_attempts').values({ phone_hash: phoneHash, created_at: now }).execute();
     return 0;
   });
 }
 
-/** The user when the password matches. Unknown email still pays for one verification, unless the cap applies. */
+/** The user when the password matches. Unknown phone still pays for one verification, unless the cap applies. */
 async function authenticatedUser(
   ctx: AppContext,
-  email: string,
+  phone: string,
   password: string,
   dummy: string,
 ): Promise<User | undefined> {
-  // Postgres text cannot hold NUL, so such an address cannot have an account: skip the lookup (it would
-  // fail) but still pay for one verification, so the answer and its timing match any unknown email.
-  const user = email.includes('\u0000')
+  // Postgres text cannot hold NUL, so such a number cannot have an account: skip the lookup (it would
+  // fail) but still pay for one verification, so the answer and its timing match any unknown phone.
+  const user = phone.includes('\u0000')
     ? undefined
-    : await ctx.db.selectFrom('users').selectAll().where('email', '=', email).executeTakeFirst();
+    : await ctx.db.selectFrom('users').selectAll().where('phone', '=', phone).executeTakeFirst();
   if (characterLength(password) > SIGNIN_PASSWORD_MAX_CHARS) return undefined;
   const ok = await verifyPassword(user?.password_hash ?? dummy, password);
   return user && ok ? user : undefined;
@@ -122,12 +120,14 @@ const SIGNIN_SCHEMA = {
   tags: ['auth'],
   summary: 'Sign in to an existing account',
   description:
-    'Returns the user and a new session (a new token family). An unknown email and a wrong password are ' +
-    'both 401 `invalid_credentials`. Limits: 20 per hour per client IP and 10 per hour per email address. ' +
+    'Returns the user and a new session (a new token family). An unknown phone number and a wrong password are ' +
+    'both 401 `invalid_credentials`. Limits: 20 per hour per client IP and 10 per hour per phone number. ' +
     'Every validated attempt counts, whether or not the password matches.',
   body: Type.Object(
     {
-      email: Type.String({ description: 'Trimmed and lower-cased by the server.' }),
+      phone: Type.String({
+        description: 'The E.164 number the account signed up with. Trimmed by the server.',
+      }),
       password: Type.String(),
       device: Type.Object(
         {
@@ -146,7 +146,6 @@ const SIGNIN_SCHEMA = {
         id: Type.String(),
         fullName: Type.String(),
         phone: Type.String(),
-        email: Type.String(),
         phoneVerified: Type.Boolean(),
         createdAt: Type.String({ format: 'date-time' }),
       }),
@@ -176,20 +175,20 @@ export async function signinRoutes(app: PublicApp, ctx: AppContext): Promise<voi
       throw authErrors.rateLimited(ipRetry);
     }
 
-    const emailRetry = await emailAttemptRetrySeconds(
+    const phoneRetry = await phoneAttemptRetrySeconds(
       ctx,
-      signinEmailHash(keys.signinEmail, input.email),
+      signinPhoneHash(keys.signinPhone, input.phone),
       now,
     );
-    if (emailRetry > 0) {
+    if (phoneRetry > 0) {
       // Contract §6: an attempt refused by a limit is not counted, by either limit.
       ipLimiter.refund(ip, now.getTime());
       ctx.metrics.inc(METRICS.authSignins, { result: 'rate_limited' });
       req.log.info({ result: 'rate_limited' }, 'sign-in refused');
-      throw authErrors.rateLimited(emailRetry);
+      throw authErrors.rateLimited(phoneRetry);
     }
 
-    const user = await authenticatedUser(ctx, input.email, input.password, dummy);
+    const user = await authenticatedUser(ctx, input.phone, input.password, dummy);
     if (!user) {
       ctx.metrics.inc(METRICS.authSignins, { result: 'invalid_credentials' });
       req.log.info({ result: 'invalid_credentials' }, 'sign-in refused');

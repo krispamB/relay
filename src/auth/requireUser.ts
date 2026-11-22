@@ -12,10 +12,17 @@ import type { FastifyRequest } from 'fastify';
 import { WindowLimiter } from '../app.js';
 import { MINUTE } from '../clock.js';
 import type { AppContext } from '../context.js';
-import { bearerToken } from '../devices/auth.js';
 import { authErrors } from './errors.js';
 import type { AuthKeys } from './keys.js';
 import { verifyAccessToken } from './tokens.js';
+
+/** The token of an `Authorization: Bearer <token>` header (scheme matched exactly), or undefined. */
+export function bearerToken(req: FastifyRequest): string | undefined {
+  const header = req.headers.authorization;
+  if (!header?.startsWith('Bearer ')) return undefined;
+  const token = header.slice(7).trim();
+  return token === '' ? undefined : token;
+}
 
 /** Contract §5: everything except sign-up and refresh, keyed by user. */
 const USER_REQUESTS_PER_MINUTE = 120;

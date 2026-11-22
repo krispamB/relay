@@ -2,16 +2,14 @@
  * Renders the public API's OpenAPI document, exactly as the relay serves it at GET /v1/openapi.json.
  *
  * The public app is built with a stand-in context: building the routes needs the configuration's
- * shape, never a database, Core or attestation. Nothing here connects anywhere.
- * Auth is switched ON in the stand-in, so docs/openapi.json documents the whole API, auth routes
- * included. A relay running with AUTH_ENABLED=false serves the same document without them.
+ * shape, never a database or Core. Nothing here connects anywhere.
  * Used by scripts/export-openapi.ts (writes docs/openapi.json) and by test/docs/openapi.test.ts
  * (fails when the committed file is out of date).
  */
 import { NoopAlerter } from '../src/alerts.js';
 import { buildPublicApp } from '../src/app.js';
 import { systemClock } from '../src/clock.js';
-import { type Config, DEFAULT_LIMITS } from '../src/config.js';
+import { type Config, DEFAULT_LIMITS, DEFAULT_SOS_NATURE_TEXT } from '../src/config.js';
 import type { AppContext } from '../src/context.js';
 import type { CoreClient } from '../src/core/types.js';
 import { createDb } from '../src/db/index.js';
@@ -44,20 +42,11 @@ function standInConfig(): Config {
     },
     intakesFile: undefined,
     intakesJson: '[]',
-    attestation: {
-      mode: 'permissive',
-      androidPackageName: undefined,
-      androidCertSha256: [],
-      googleServiceAccountJson: undefined,
-      iosTeamId: undefined,
-      iosBundleId: undefined,
-      iosAppAttestEnv: 'production',
-    },
-    statusTokenSecret: 'unused',
     phoneHashSecret: 'unused',
     adminToken: 'unused',
-    // On, so the auth routes are in the document. The secret is never used: no token is signed here.
-    auth: { enabled: true, tokenSecret: 'unused-while-rendering-the-openapi-document' },
+    // The secret is never used: no token is signed here.
+    auth: { tokenSecret: 'unused-while-rendering-the-openapi-document' },
+    sosNatureText: DEFAULT_SOS_NATURE_TEXT,
     alertWebhookUrl: undefined,
     demoDispatchAfterS: 30,
     demoCloseAfterS: 90,
@@ -87,7 +76,6 @@ export async function renderOpenApi(): Promise<string> {
     log: silentLogger(),
     intakes: new Intakes([]),
     core,
-    attestation: { verifyRegistration: notUsed('Attestation'), verifyRequest: notUsed('Attestation') },
     alerts: new NoopAlerter(),
     metrics: new NoopMetrics(),
   };

@@ -1,6 +1,6 @@
 /**
  * The auth feature as an encapsulated Fastify plugin (docs/auth-implementation-plan.md, "Decisions").
- * src/app.ts registers it only when `config.auth.enabled`; with auth off no auth route exists.
+ * src/app.ts always registers it (AUTH_ENABLED is gone: the SOS routes need the signed-in user).
  *
  * The plugin has its own error handler, so auth routes answer with the contract's error bodies
  * (docs/auth-contract.md §2) while the SOS routes keep the relay's. It does not set a not-found

@@ -8,15 +8,15 @@ import { sosRules } from '../../src/sos/limits.js';
 import { isoSeconds } from '../../src/sos/receipt.js';
 import {
   locationIsFresh,
-  parsePhoneE164,
+  locationIsSound,
   sanitizeText,
   textLength,
   validateContent,
   validateStatic,
 } from '../../src/sos/validate.js';
 import { getSubmission, ok, scriptedCore } from '../delivery/fixtures.js';
-import { closeTestDb, resetDb, testIntakes } from '../helpers/context.js';
-import { ADDRESS, device, type Harness, harness, isoAgo, LAT, LON, PHONE, postSos } from './helpers.js';
+import { closeTestDb, resetDb } from '../helpers/context.js';
+import { ADDRESS, caller, type Harness, harness, isoAgo, LAT, LON, postSos } from './helpers.js';
 
 const NOW = new Date('2026-11-17T12:00:00.000Z');
 const ago = (ms: number) => new Date(NOW.getTime() - ms).toISOString();
@@ -33,8 +33,6 @@ function codeOf(fn: () => unknown): string | undefined {
 
 const base = {
   intakeCode: 'TEST-DEPT',
-  nature: 'fire',
-  phone: PHONE,
   location: { lat: LAT, lon: LON, accuracyM: 10, capturedAt: ago(5000), source: 'gps' as const },
 };
 
@@ -51,24 +49,15 @@ describe('sanitising (unit)', () => {
   });
 });
 
-describe('phone (unit)', () => {
-  it('accepts a valid E.164 number and returns it in E.164', () => {
-    expect(parsePhoneE164(PHONE)).toBe(PHONE);
-    expect(parsePhoneE164('+14155552671')).toBe('+14155552671');
+describe('location soundness (unit, shared with the live socket)', () => {
+  it('needs only lat, lon and capturedAt', () => {
+    expect(locationIsSound({ lat: LAT, lon: LON, capturedAt: ago(1000) })).toBe(true);
+    expect(locationIsSound({ lat: 0, lon: 0, capturedAt: ago(1000) })).toBe(false);
+    expect(locationIsSound({ lat: LAT, lon: LON, capturedAt: 'yesterday' })).toBe(false);
   });
-  it.each(['08012345678', '+1234', '+23480123', '+999123456789', '+234 801 234 5678', ''])(
-    'rejects %j',
-    (p) => {
-      expect(parsePhoneE164(p)).toBeUndefined();
-    },
-  );
 });
 
 describe('validateStatic (unit)', () => {
-  it('rejects an invalid phone', () => {
-    expect(codeOf(() => validateStatic({ ...base, phone: '+23480123' }))).toBe('phone_invalid');
-  });
-
   it.each([
     ['lat over 90', { lat: 90.1, lon: 3 }],
     ['lat under -90', { lat: -91, lon: 3 }],
@@ -102,10 +91,6 @@ describe('validateStatic (unit)', () => {
     expect(validateStatic({ ...noLoc, address: padded }).address).toHaveLength(499);
     expect(validateStatic({ ...noLoc, address: 'a'.repeat(500) }).address).toHaveLength(500);
     expect(codeOf(() => validateStatic({ ...noLoc, address: 'a'.repeat(501) }))).toBe('address_too_long');
-    expect(codeOf(() => validateStatic({ ...base, name: 'n'.repeat(101) }))).toBe('name_too_long');
-    expect(validateStatic({ ...base, name: ` ${'n'.repeat(100)} ` }).name).toHaveLength(100);
-    expect(codeOf(() => validateStatic({ ...base, details: 'd'.repeat(1001) }))).toBe('details_too_long');
-    expect(validateStatic({ ...base, details: '🔥'.repeat(1000) }).details).toBe('🔥'.repeat(1000));
   });
 
   it('drops an impossible accuracy on its own', () => {
@@ -116,15 +101,7 @@ describe('validateStatic (unit)', () => {
 });
 
 describe('validateContent (unit)', () => {
-  const intake = testIntakes().get('TEST-DEPT')!;
   const policy = { requiredLocation: false };
-
-  it('requires a nature of the intake and returns its label', () => {
-    expect(validateContent(validateStatic(base), intake, NOW, policy).natureLabel).toBe('Fire');
-    expect(
-      codeOf(() => validateContent(validateStatic({ ...base, nature: 'flood' }), intake, NOW, policy)),
-    ).toBe('nature_invalid');
-  });
 
   it.each([
     ['older than 10 minutes', ago(10 * MINUTE + 1000)],
@@ -132,15 +109,10 @@ describe('validateContent (unit)', () => {
     ['beyond the skew allowance', ago(-31 * SECOND)],
   ])('a fix %s is a 400 without an address and dropped with one', (_n, capturedAt) => {
     const loc = { ...base.location, capturedAt };
-    expect(
-      codeOf(() => validateContent(validateStatic({ ...base, location: loc }), intake, NOW, policy)),
-    ).toBe('location_invalid');
-    const v = validateContent(
-      validateStatic({ ...base, location: loc, address: ADDRESS }),
-      intake,
-      NOW,
-      policy,
+    expect(codeOf(() => validateContent(validateStatic({ ...base, location: loc }), NOW, policy))).toBe(
+      'location_invalid',
     );
+    const v = validateContent(validateStatic({ ...base, location: loc, address: ADDRESS }), NOW, policy);
     expect(v.location).toBeNull();
   });
 
@@ -152,12 +124,12 @@ describe('validateContent (unit)', () => {
   it('with required_location, an SOS with no usable location is a 400 even with an address', () => {
     const req = { requiredLocation: true };
     const { location: _l, ...noLoc } = base;
-    expect(
-      codeOf(() => validateContent(validateStatic({ ...noLoc, address: ADDRESS }), intake, NOW, req)),
-    ).toBe('location_required');
+    expect(codeOf(() => validateContent(validateStatic({ ...noLoc, address: ADDRESS }), NOW, req))).toBe(
+      'location_required',
+    );
     const stale = { ...base, address: ADDRESS, location: { ...base.location, capturedAt: ago(20 * MINUTE) } };
-    expect(codeOf(() => validateContent(validateStatic(stale), intake, NOW, req))).toBe('location_required');
-    expect(validateContent(validateStatic(base), intake, NOW, req).location).not.toBeNull();
+    expect(codeOf(() => validateContent(validateStatic(stale), NOW, req))).toBe('location_required');
+    expect(validateContent(validateStatic(base), NOW, req).location).not.toBeNull();
   });
 });
 
@@ -172,11 +144,11 @@ describe('budget and limits (unit)', () => {
 
   it('checks per-caller limits before the breaker', () => {
     const rules = sosRules(
-      { deviceId: 'd', phoneHash: 'p', ip: 'i', intakeCode: 'c', demo: false },
+      { userId: 'u', phoneHash: 'p', ip: 'i', intakeCode: 'c', demo: false },
       DEFAULT_LIMITS,
     );
     expect(rules.map((r) => [r.rule, r.max, r.windowMs])).toEqual([
-      ['sos_per_device', 3, 86_400_000],
+      ['sos_per_user', 3, 86_400_000],
       ['sos_per_phone', 3, 86_400_000],
       ['sos_per_ip', 10, 3_600_000],
       ['intake_breaker', 30, 600_000],
@@ -199,24 +171,15 @@ describe('validation through the API (PRD §7.4)', () => {
 
   async function send(overrides: Record<string, unknown>, opts: Parameters<typeof postSos>[1] = {}) {
     h ??= await harness({ core: scriptedCore(ok()) });
-    const d = await device(h);
+    const d = await caller(h);
     return d.send(overrides, opts);
   }
 
-  it('stores sanitised text and the nature label', async () => {
-    const res = await send({
-      name: '  Ade\u0000\n  Okafor ',
-      details: 'Smoke\t\tand   fire\u0007',
-      address: ' 12\u001b Marina   Rd ',
-    });
+  it('stores a sanitised address', async () => {
+    const res = await send({ address: ' 12\u001b Marina   Rd ' });
     expect(res.status).toBe(201);
     const row = await getSubmission(h!.ctx.db, res.body.receiptId);
-    expect(row).toMatchObject({
-      name: 'Ade Okafor',
-      details: 'Smoke and fire',
-      address: '12 Marina Rd',
-      nature_label: 'Fire',
-    });
+    expect(row).toMatchObject({ address: '12 Marina Rd' });
   });
 
   it.each([
@@ -229,15 +192,12 @@ describe('validation through the API (PRD §7.4)', () => {
       'a location source outside the list',
       { location: { lat: LAT, lon: LON, capturedAt: '2026-11-17T11:59:00Z', source: 'wifi' } },
     ],
-    ['a missing phone', { phone: undefined }],
-    ['a phone not in E.164', { phone: '08012345678' }],
-    ['a number that is not valid', { phone: '+23480123' }],
-    ['a wrong type', { name: 5 }],
-    ['a null field', { details: null }],
+    ['a missing intake code', { intakeCode: undefined }],
+    ['a wrong type', { address: 5 }],
+    ['a null field', { address: null }],
     ['a malformed capturedAt', { location: { lat: LAT, lon: LON, capturedAt: 'yesterday', source: 'gps' } }],
-    ['a nature not in the intake', { nature: 'flood' }],
     ['no location and no address', { location: undefined }],
-    ['a name over 100 characters', { name: 'n'.repeat(101) }],
+    ['an address over 500 characters', { location: undefined, address: 'a'.repeat(501) }],
   ])('400 for %s', async (_n, overrides) => {
     const res = await send(overrides);
     expect(res.status).toBe(400);
@@ -254,9 +214,9 @@ describe('validation through the API (PRD §7.4)', () => {
 
   it('400 for an empty or non-JSON body', async () => {
     h = await harness();
-    const d = await device(h);
-    expect((await postSos(h.app, { token: d.token, payload: '' })).status).toBe(400);
-    expect((await postSos(h.app, { token: d.token, payload: '{"intakeCode":' })).status).toBe(400);
+    const d = await caller(h);
+    expect((await postSos(h.app, { token: d.token(), payload: '' })).status).toBe(400);
+    expect((await postSos(h.app, { token: d.token(), payload: '{"intakeCode":' })).status).toBe(400);
   });
 
   it('a stale location is dropped when an address is given', async () => {

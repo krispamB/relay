@@ -3,8 +3,8 @@ import { AuthError, authErrors } from '../../src/auth/errors.js';
 
 describe('AuthError.toBody', () => {
   it('has the contract envelope: code and message, nothing else by default', () => {
-    const body = new AuthError(409, 'email_taken', 'Taken.').toBody();
-    expect(body).toEqual({ error: { code: 'email_taken', message: 'Taken.' } });
+    const body = new AuthError(409, 'phone_taken', 'Taken.').toBody();
+    expect(body).toEqual({ error: { code: 'phone_taken', message: 'Taken.' } });
   });
 
   it('adds retryAfterSeconds and fields only when set', () => {
@@ -33,7 +33,7 @@ describe('authErrors: one helper for every code in the contract', () => {
   const cases: [string, () => AuthError, number, string][] = [
     [
       'validationFailed',
-      () => authErrors.validationFailed([{ field: 'email', code: 'required' }]),
+      () => authErrors.validationFailed([{ field: 'phone', code: 'required' }]),
       400,
       'validation_failed',
     ],
@@ -42,7 +42,6 @@ describe('authErrors: one helper for every code in the contract', () => {
     ['rateLimited', () => authErrors.rateLimited(30), 429, 'rate_limited'],
     ['internalError', () => authErrors.internalError(), 500, 'internal_error'],
     ['unavailable', () => authErrors.unavailable(), 503, 'unavailable'],
-    ['emailTaken', () => authErrors.emailTaken(), 409, 'email_taken'],
     ['phoneTaken', () => authErrors.phoneTaken(), 409, 'phone_taken'],
     ['idempotencyKeyReused', () => authErrors.idempotencyKeyReused(), 422, 'idempotency_key_reused'],
     ['invalidRefreshToken', () => authErrors.invalidRefreshToken(), 401, 'invalid_refresh_token'],
@@ -65,7 +64,7 @@ describe('authErrors: one helper for every code in the contract', () => {
 
   it('validationFailed carries the fields, and only it does', () => {
     const fields = [
-      { field: 'email', code: 'invalid_email' },
+      { field: 'phone', code: 'invalid_phone' },
       { field: 'device.platform', code: 'invalid_value' },
     ] as const;
     expect(authErrors.validationFailed([...fields]).toBody().error.fields).toEqual(fields);

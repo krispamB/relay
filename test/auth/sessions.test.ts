@@ -39,7 +39,6 @@ async function insertUser(id = 'user-1') {
       id,
       full_name: 'Ada Okafor',
       phone: `+23480${id.length}${id.charCodeAt(id.length - 1)}12345`,
-      email: `${id}@example.com`,
       password_hash: '$argon2id$stub',
       created_at: now,
       updated_at: now,

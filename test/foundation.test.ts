@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildPublicApp, WindowLimiter } from '../src/app.js';
 import { DAY } from '../src/clock.js';
 import { ConfigError, loadConfig } from '../src/config.js';
-import { bindingHash, safeEqual, statusTokenFor } from '../src/crypto.js';
+import { safeEqual } from '../src/crypto.js';
 import { isUniqueViolation } from '../src/db/index.js';
 import { newReceiptId, newReference, RECEIPT_ID_PATTERN, REFERENCE_ALPHABET } from '../src/ids.js';
 import { parseIntakes } from '../src/intakes.js';
@@ -17,17 +17,17 @@ const baseEnv = {
   RESGRID_CALL_TYPE_NAME: 'Public SOS',
   RESGRID_PRIORITY_ID: '3',
   INTAKES_FILE: './intakes.json',
-  ATTESTATION_MODE: 'permissive',
-  STATUS_TOKEN_SECRET: 'a'.repeat(32),
   PHONE_HASH_SECRET: 'b'.repeat(32),
   ADMIN_TOKEN: 'c'.repeat(32),
+  AUTH_TOKEN_SECRET: 'd'.repeat(32),
 };
 
 describe('config', () => {
   it('loads a valid environment with defaults', () => {
     const c = loadConfig(baseEnv);
     expect(c.resgrid.apiBase).toBe('https://core.example.org');
-    expect(c.limits.sosPerDevicePer24h).toBe(3);
+    expect(c.limits.sosPerUserPer24h).toBe(3);
+    expect(c.sosNatureText).toBe('SOS – caller recording to follow');
     expect(c.host).toBe('::');
   });
 
@@ -41,54 +41,48 @@ describe('config', () => {
     }
   });
 
-  it('refuses permissive mode in production without the override', () => {
-    const prod = { ...baseEnv, NODE_ENV: 'production', CLIENT_IP_HEADER: 'x-real-ip' };
-    expect(() => loadConfig(prod)).toThrow(/permissive/);
-    expect(() => loadConfig({ ...prod, ALLOW_PERMISSIVE_IN_PRODUCTION: 'true' })).not.toThrow();
+  it('has no attestation or status-token settings: the device model is gone', () => {
+    const c = loadConfig({
+      ...baseEnv,
+      ATTESTATION_MODE: 'not-a-mode',
+      STATUS_TOKEN_SECRET: 'short',
+      GOOGLE_SERVICE_ACCOUNT_JSON: '{not json',
+    });
+    expect(c).not.toHaveProperty('attestation');
+    expect(c).not.toHaveProperty('statusTokenSecret');
+    expect(c.limits).not.toHaveProperty('registrationsPerIpPerHour');
   });
 
   it('needs the client IP header in production, so callers never share one rate limit', () => {
-    const prod = { ...baseEnv, NODE_ENV: 'production', ALLOW_PERMISSIVE_IN_PRODUCTION: 'true' };
+    const prod = { ...baseEnv, NODE_ENV: 'production' };
     expect(() => loadConfig(prod)).toThrow(/CLIENT_IP_HEADER/);
     expect(() => loadConfig({ ...prod, CLIENT_IP_HEADER: 'X-Real-IP' })).not.toThrow();
     expect(() => loadConfig({ ...prod, ALLOW_SOCKET_IP_IN_PRODUCTION: 'true' })).not.toThrow();
   });
 
-  it('leaves auth off by default, with no secret needed', () => {
-    expect(loadConfig(baseEnv).auth).toEqual({ enabled: false, tokenSecret: '' });
-    expect(loadConfig({ ...baseEnv, AUTH_ENABLED: 'false' }).auth.enabled).toBe(false);
-  });
-
-  it('refuses auth on without a token secret of at least 32 bytes', () => {
-    const on = { ...baseEnv, AUTH_ENABLED: 'true' };
-    expect(() => loadConfig(on)).toThrow(/AUTH_TOKEN_SECRET is required/);
-    expect(() => loadConfig({ ...on, AUTH_TOKEN_SECRET: 'x'.repeat(31) })).toThrow(
+  it('always needs the auth token secret, of at least 32 bytes', () => {
+    const { AUTH_TOKEN_SECRET: _omit, ...without } = baseEnv;
+    expect(() => loadConfig(without)).toThrow(/AUTH_TOKEN_SECRET is required/);
+    expect(() => loadConfig({ ...baseEnv, AUTH_TOKEN_SECRET: 'x'.repeat(31) })).toThrow(
       /AUTH_TOKEN_SECRET must be at least 32 bytes/,
     );
-    expect(loadConfig({ ...on, AUTH_TOKEN_SECRET: 'x'.repeat(32) }).auth).toEqual({
-      enabled: true,
-      tokenSecret: 'x'.repeat(32),
+    expect(loadConfig(baseEnv).auth).toEqual({ tokenSecret: 'd'.repeat(32) });
+  });
+
+  it('has no AUTH_ENABLED switch any more: the value is ignored', () => {
+    expect(loadConfig({ ...baseEnv, AUTH_ENABLED: 'false' }).auth).toEqual({ tokenSecret: 'd'.repeat(32) });
+  });
+
+  it('reads the per-user SOS limit and the SOS nature text', () => {
+    const c = loadConfig({
+      ...baseEnv,
+      LIMIT_SOS_PER_USER_PER_24H: '5',
+      SOS_NATURE_TEXT: '  SOS – listen to the recording  ',
     });
-  });
-
-  it('rejects a bad AUTH_ENABLED value', () => {
-    expect(() => loadConfig({ ...baseEnv, AUTH_ENABLED: 'yes' })).toThrow(
-      /AUTH_ENABLED must be "true" or "false"/,
-    );
-  });
-
-  it('does not check the auth secret while auth is off', () => {
-    expect(loadConfig({ ...baseEnv, AUTH_TOKEN_SECRET: 'short' }).auth).toEqual({
-      enabled: false,
-      tokenSecret: '',
-    });
-  });
-
-  it('needs platform settings in enforce mode', () => {
-    expect(() => loadConfig({ ...baseEnv, ATTESTATION_MODE: 'enforce' })).toThrow(/enforce/);
-    expect(() =>
-      loadConfig({ ...baseEnv, ATTESTATION_MODE: 'enforce', IOS_TEAM_ID: 'T', IOS_BUNDLE_ID: 'b' }),
-    ).not.toThrow();
+    expect(c.limits.sosPerUserPer24h).toBe(5);
+    expect(c.sosNatureText).toBe('SOS – listen to the recording');
+    expect(() => loadConfig({ ...baseEnv, SOS_NATURE_TEXT: 'x'.repeat(201) })).toThrow(/SOS_NATURE_TEXT/);
+    expect(() => loadConfig({ ...baseEnv, SOS_NATURE_TEXT: 'SOS\u0007' })).toThrow(/SOS_NATURE_TEXT/);
   });
 });
 
@@ -117,18 +111,9 @@ describe('ids and crypto', () => {
     for (const ch of ref.slice(4)) expect(REFERENCE_ALPHABET).toContain(ch);
     expect(REFERENCE_ALPHABET).not.toMatch(/[01OIL]/);
   });
-  it('derives a stable status token and compares safely', () => {
-    const t = statusTokenFor('secret', 'sos_1');
-    expect(statusTokenFor('secret', 'sos_1')).toBe(t);
-    expect(statusTokenFor('secret', 'sos_2')).not.toBe(t);
-    expect(safeEqual(t, t)).toBe(true);
-    expect(safeEqual(t, `${t}x`)).toBe(false);
-  });
-  it('binds the hash to key and exact body bytes', () => {
-    const a = bindingHash('k', Buffer.from('{"a":1}'));
-    expect(a.length).toBe(32);
-    expect(bindingHash('k', Buffer.from('{"a": 1}')).equals(a)).toBe(false);
-    expect(bindingHash('k2', Buffer.from('{"a":1}')).equals(a)).toBe(false);
+  it('compares safely', () => {
+    expect(safeEqual('abc', 'abc')).toBe(true);
+    expect(safeEqual('abc', 'abcx')).toBe(false);
   });
 });
 
@@ -175,30 +160,28 @@ describe('database-backed foundation', () => {
     expect(unavailableReason(await getState(ctx.db), ctx.clock.now())).toBe('unverified');
   });
 
-  it('enforces one open submission per device and one row per idempotency key', async () => {
+  it('enforces one open submission per user and one row per idempotency key', async () => {
     const ctx = createTestContext();
     const now = ctx.clock.now();
     await ctx.db
-      .insertInto('devices')
+      .insertInto('users')
       .values({
-        id: 'dev_1',
-        platform: 'ios',
-        token_hash: 'h',
-        token_expires_at: now,
-        attested: false,
+        id: 'usr_1',
+        full_name: 'Ade',
+        phone: '+2348012345678',
+        password_hash: '$argon2id$stub',
         created_at: now,
         updated_at: now,
       })
       .execute();
     const row = (id: string, key: string, reference: string) => ({
       id,
-      device_id: 'dev_1',
+      user_id: 'usr_1',
       idempotency_key: key,
       intake_code: 'TEST-DEPT',
       reference,
       status: 'queued' as const,
-      nature_id: 'fire',
-      nature_label: 'Fire',
+      nature_label: 'SOS – caller recording to follow',
       phone: '+2348012345678',
       phone_hash: 'ph',
       ip: '203.0.113.1',
@@ -214,7 +197,7 @@ describe('database-backed foundation', () => {
       .values(row('sos_b', 'k2', 'SOS-BBBB'))
       .execute()
       .catch((e) => e);
-    expect(isUniqueViolation(second, 'submissions_one_open_per_device_idx')).toBe(true);
+    expect(isUniqueViolation(second, 'submissions_one_open_per_user_idx')).toBe(true);
 
     await ctx.db.updateTable('submissions').set({ status: 'closed' }).where('id', '=', 'sos_a').execute();
     await ctx.db

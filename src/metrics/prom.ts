@@ -38,7 +38,6 @@ export function createPromMetrics(): PromMetrics {
 
   counter(METRICS.submissions, ['outcome']);
   counter(METRICS.coreCalls, ['endpoint', 'result']);
-  counter(METRICS.attestations, ['platform', 'phase', 'result']);
   counter(METRICS.rateLimited, ['rule']);
   histogram(METRICS.coreLatency, ['endpoint']);
   histogram(METRICS.sosLatency, []);
