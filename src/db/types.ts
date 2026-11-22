@@ -57,6 +57,8 @@ export interface SubmissionsTable {
   live_lat: ColumnType<number | null, number | null | undefined, number | null>;
   live_lon: ColumnType<number | null, number | null | undefined, number | null>;
   live_at: NullableTimestamp;
+  /** When the relay last stored a socket location (relay clock); the 1-per-5-s limit counts from it. */
+  live_stored_at: NullableTimestamp;
 }
 
 export interface SubmissionEventsTable {
