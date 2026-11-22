@@ -84,6 +84,13 @@ describe('config', () => {
     expect(() => loadConfig({ ...baseEnv, SOS_NATURE_TEXT: 'x'.repeat(201) })).toThrow(/SOS_NATURE_TEXT/);
     expect(() => loadConfig({ ...baseEnv, SOS_NATURE_TEXT: 'SOS\u0007' })).toThrow(/SOS_NATURE_TEXT/);
   });
+
+  it('reads the recordings cap per SOS: default 1, at least 1', () => {
+    expect(loadConfig(baseEnv).recordingsPerSos).toBe(1);
+    expect(loadConfig({ ...baseEnv, RECORDINGS_PER_SOS: '3' }).recordingsPerSos).toBe(3);
+    expect(() => loadConfig({ ...baseEnv, RECORDINGS_PER_SOS: '0' })).toThrow(/RECORDINGS_PER_SOS/);
+    expect(() => loadConfig({ ...baseEnv, RECORDINGS_PER_SOS: 'many' })).toThrow(/RECORDINGS_PER_SOS/);
+  });
 });
 
 describe('intakes', () => {

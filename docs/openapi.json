@@ -964,6 +964,445 @@
         }
       }
     },
+    "/v1/sos/{receiptId}/recording": {
+      "post": {
+        "operationId": "uploadSosRecording",
+        "summary": "Upload the voice recording of an SOS.",
+        "tags": [
+          "sos"
+        ],
+        "description": "The raw `.m4a` (AAC in an MP4 container) as the request body, `Content-Type: audio/mp4`, at most 400 000 bytes. The relay checks the size, the `ftyp` box and the declared duration; it does not decode the audio. It stores the recording and attaches it to the Core call once the call exists, retrying like delivery. Only the SOS's owner can upload: anyone else's receipt is a 404.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "audio/mp4": {
+              "schema": {
+                "format": "binary",
+                "description": "The raw audio bytes."
+              }
+            }
+          },
+          "description": "The raw audio bytes."
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "receiptId",
+            "required": true
+          },
+          {
+            "schema": {
+              "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+              "type": "string"
+            },
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "description": "UUID. One per recording, reused on every retry of the same bytes."
+          },
+          {
+            "schema": {
+              "pattern": "^[1-9][0-9]{0,4}$",
+              "type": "string"
+            },
+            "in": "header",
+            "name": "x-recording-duration-ms",
+            "required": true,
+            "description": "Length of the recording in milliseconds: an integer from 1 to 60000."
+          }
+        ],
+        "security": [
+          {
+            "accessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A replay: the same Idempotency-Key and the same bytes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "A replay: the same Idempotency-Key and the same bytes.",
+                  "type": "object",
+                  "required": [
+                    "recordingId",
+                    "seq",
+                    "status"
+                  ],
+                  "properties": {
+                    "recordingId": {
+                      "description": "`rec_` + ULID.",
+                      "type": "string"
+                    },
+                    "seq": {
+                      "minimum": 1,
+                      "description": "1-based position among the SOS recordings.",
+                      "type": "integer"
+                    },
+                    "status": {
+                      "description": "`pending` until the relay has attached it to the Core call. A replay answers with the current status.",
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "pending"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "attached"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "dropped"
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Stored; the relay will attach it to the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Stored; the relay will attach it to the call.",
+                  "type": "object",
+                  "required": [
+                    "recordingId",
+                    "seq",
+                    "status"
+                  ],
+                  "properties": {
+                    "recordingId": {
+                      "description": "`rec_` + ULID.",
+                      "type": "string"
+                    },
+                    "seq": {
+                      "minimum": 1,
+                      "description": "1-based position among the SOS recordings.",
+                      "type": "integer"
+                    },
+                    "status": {
+                      "description": "`pending` until the relay has attached it to the Core call. A replay answers with the current status.",
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "pending"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "attached"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "dropped"
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty body, not an MP4 container, or bad headers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Empty body, not an MP4 container, or bad headers.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The access token is missing, not valid, or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "The access token is missing, not valid, or expired.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found: unknown receipt, or not the signed-in user’s.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Not found: unknown receipt, or not the signed-in user’s.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`recording_limit`: the SOS already holds its recordings (`RECORDINGS_PER_SOS`). `sos_closed`: the SOS is closed or failed, so the audio can never be attached.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "`recording_limit`: the SOS already holds its recordings (`RECORDINGS_PER_SOS`). `sos_closed`: the SOS is closed or failed, so the audio can never be attached.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`: over 400 000 bytes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "`payload_too_large`: over 400 000 bytes.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The content type is not `audio/mp4`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "The content type is not `audio/mp4`.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`idempotency_key_reused`: the same key, different bytes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "`idempotency_key_reused`: the same key, different bytes.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Rate limited.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/auth/signup": {
       "post": {
         "summary": "Create an account and sign in",

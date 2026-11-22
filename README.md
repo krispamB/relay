@@ -123,6 +123,7 @@ TEST_DATABASE_URL=postgres://user:pass@localhost:5432/relay_test npm test
 | `PHONE_HASH_SECRET`, `ADMIN_TOKEN` | At least 32 bytes each (`openssl rand -hex 32`). Changing the first orphans existing phone strikes and blocks. |
 | `AUTH_TOKEN_SECRET` | Required, at least 32 bytes (`openssl rand -hex 32`). Auth is always on: the SOS routes take the signed-in user's access token (`AUTH_ENABLED` is gone). It signs access tokens and derives refresh tokens: changing it signs every user out. |
 | `SOS_NATURE_TEXT` | The Nature of every SOS call in Core (default `SOS – caller recording to follow`), at most 200 characters. The caller sends no nature: the recording carries what happened. |
+| `RECORDINGS_PER_SOS` | Voice recordings one SOS may hold (default `1`, at least 1). A further upload is refused with 409 `recording_limit`. |
 | `CLIENT_IP_HEADER` | Header holding the caller's address. Unset locally. On Railway: `x-real-ip`. Wrong value means every caller shares one IP and the per-IP limits misfire. |
 | `ALERT_WEBHOOK_URL` | Where alerts go. Unset means alerts are only logged. |
 | `RUN_JOBS` | `false` runs the HTTP servers only (jobs elsewhere). |

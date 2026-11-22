@@ -323,13 +323,14 @@ the MP4 `ftyp` box, and the declared duration; it does not decode or transcode a
 | HTTP | Body | Meaning | App does |
 |---|---|---|---|
 | **202** | `{ "recordingId", "seq", "status": "pending" }` | Accepted for attach | Show upload pending in live state (`recording.status`). |
-| **200** | Same as 202 | Replay: same key and same bytes | Treat as success. |
-| **400** | error | Empty body or bad headers | Fix client. |
+| **200** | Same as 202, but `status` is the recording's current status | Replay: same key and same bytes | Treat as success. |
+| **400** | `invalid_request` | Empty body, a body that is not an MP4 container, or a missing or bad `Idempotency-Key` / `X-Recording-Duration-Ms` | Fix client. |
 | **401** | `unauthorized` | | Refresh, retry once with same key and bytes. |
 | **404** | `not_found` | Not owner or unknown receipt | Stop. |
 | **409** | `recording_limit` | Already has max recordings (default 1) | Do not send another. |
 | **409** | `sos_closed` | SOS `closed` or `failed` | Discard local audio; cannot attach. |
-| **413** | `payload_too_large` | Over 400 KB | Re-encode or shorten before retry (new key if bytes change). |
+| **413** | `payload_too_large` | Over 400 000 bytes | Re-encode or shorten before retry (new key if bytes change). |
+| **415** | `invalid_request` | `Content-Type` is not `audio/mp4` | Fix client. |
 | **422** | `idempotency_key_reused` | Same key, different bytes | Client bug: new key for new bytes. |
 
 | Field | Meaning |

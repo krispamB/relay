@@ -15,6 +15,7 @@ import type { AppContext } from './context.js';
 import { ApiError, errors, safeError } from './errors.js';
 import { METRICS } from './metrics.js';
 import { intakeRoutes } from './routes/intake.js';
+import { recordingRoutes } from './routes/recording.js';
 import { sosRoutes } from './routes/sos.js';
 import { statusRoutes } from './routes/status.js';
 
@@ -61,6 +62,11 @@ export function installErrorHandling(app: AnyApp): void {
       return reply
         .status(400)
         .send(errors.badRequest('invalid_request', 'The request is not valid.').toBody());
+    }
+    if (e.statusCode === 413) {
+      return reply
+        .status(413)
+        .send({ error: { code: 'payload_too_large', message: 'The request body is too large.' } });
     }
     if (typeof e.statusCode === 'number' && e.statusCode >= 400 && e.statusCode < 500) {
       const status = e.statusCode === 413 || e.statusCode === 415 ? e.statusCode : 400;
@@ -170,6 +176,7 @@ export async function buildPublicApp(ctx: AppContext): Promise<PublicApp> {
   await intakeRoutes(app, ctx);
   await sosRoutes(app, ctx);
   await statusRoutes(app, ctx);
+  await recordingRoutes(app, ctx);
 
   // Encapsulated: its own error handler. Registered after the per-IP limiter hook, which it inherits.
   await app.register(authPlugin, { ctx });
