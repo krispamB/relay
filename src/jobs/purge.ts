@@ -15,17 +15,19 @@
 
 import { DAY, HOUR } from '../clock.js';
 import type { AppContext } from '../context.js';
+import { bumpLiveVersion } from '../live/version.js';
+import { METRICS } from '../metrics.js';
 import type { Job } from './runner.js';
+import { STATUS_WINDOW_MS } from './statusPoller.js';
 
 export const PURGE_INTERVAL_MS = HOUR;
 export const SUBMISSION_RETENTION_MS = 30 * DAY;
-export const DEVICE_RETENTION_AFTER_EXPIRY_MS = 30 * DAY;
 export const ALERT_LOG_RETENTION_MS = DAY;
 /** Auth contract §8. Expired tokens, and tokens of a family revoked this long ago. */
 export const AUTH_TOKEN_RETENTION_MS = 7 * DAY;
 /** Auth contract §8. Sign-up idempotency rows and per-phone attempt rows. */
 export const AUTH_SIGNUP_RETENTION_MS = DAY;
-/** Sign-in attempts are only needed for the 1-hour per-email limit (contract §6). */
+/** Sign-in attempts are only needed for the 1-hour per-phone limit (contract §6). */
 export const AUTH_SIGNIN_ATTEMPT_RETENTION_MS = HOUR;
 /** Rows per DELETE statement; each statement is its own short transaction. */
 export const PURGE_BATCH = 500;
@@ -33,12 +35,11 @@ export const PURGE_BATCH = 500;
 const MAX_BATCHES = 200;
 
 export interface PurgeCounts {
+  /** Pending recordings dropped, their audio cleared, because their SOS left the 24 h window. */
+  recordingsCleared: number;
   submissions: number;
-  devices: number;
-  registrations: number;
   strikes: number;
   blocks: number;
-  nonces: number;
   alertLog: number;
   refreshTokens: number;
   tokenFamilies: number;
@@ -73,12 +74,50 @@ function count(res: { numDeletedRows: bigint }): number {
   return Number(res.numDeletedRows);
 }
 
+/**
+ * Docs/live-sos-plan.md §4.4: a recording still `pending` when its SOS leaves the 24 h window is never
+ * going to be attached (the status poller closes the SOS at the same mark, and the attach worker drops
+ * a closed SOS's recording; this is the backstop). Its audio is cleared and it is marked `dropped`, so
+ * the snapshot does not show `pending` for audio that no longer exists. The 30-day deletion of the row
+ * itself is the submission delete below (ON DELETE CASCADE).
+ */
+async function clearStalePendingRecordings(ctx: AppContext, windowCutoff: Date): Promise<number> {
+  let total = 0;
+  for (let i = 0; i < MAX_BATCHES; i++) {
+    const n = await ctx.db.transaction().execute(async (trx) => {
+      const rows = await trx
+        .updateTable('recordings')
+        .set({ status: 'dropped', drop_reason: 'window_ended', bytes: null, next_attempt_at: null })
+        .where(
+          'id',
+          'in',
+          trx
+            .selectFrom('recordings')
+            .innerJoin('submissions', 'submissions.id', 'recordings.submission_id')
+            .select('recordings.id')
+            .where('recordings.status', '=', 'pending')
+            .where('submissions.accepted_at', '<=', windowCutoff)
+            .limit(PURGE_BATCH)
+            .forUpdate('recordings')
+            .skipLocked(),
+        )
+        .returning('submission_id')
+        .execute();
+      for (const id of new Set(rows.map((r) => r.submission_id))) await bumpLiveVersion(trx, id);
+      return rows.length;
+    });
+    if (n > 0) ctx.metrics.inc(METRICS.recordingsDropped, { reason: 'window_ended' }, n);
+    total += n;
+    if (n < PURGE_BATCH) break;
+  }
+  return total;
+}
+
 /** One purge pass. Exported for tests. */
 export async function runPurgePass(ctx: AppContext): Promise<PurgeCounts> {
   const { db } = ctx;
   const now = ctx.clock.now();
   const submissionCutoff = new Date(now.getTime() - SUBMISSION_RETENTION_MS);
-  const deviceCutoff = new Date(now.getTime() - DEVICE_RETENTION_AFTER_EXPIRY_MS);
   const alertCutoff = new Date(now.getTime() - ALERT_LOG_RETENTION_MS);
   const tokenCutoff = new Date(now.getTime() - AUTH_TOKEN_RETENTION_MS);
   const signupCutoff = new Date(now.getTime() - AUTH_SIGNUP_RETENTION_MS);
@@ -86,7 +125,8 @@ export async function runPurgePass(ctx: AppContext): Promise<PurgeCounts> {
 
   // Postgres has no DELETE ... LIMIT, so each batch is DELETE ... WHERE key IN (SELECT key ... LIMIT n).
   const counts: PurgeCounts = {
-    // Events go with their submission (ON DELETE CASCADE).
+    recordingsCleared: await clearStalePendingRecordings(ctx, new Date(now.getTime() - STATUS_WINDOW_MS)),
+    // Events, recordings and units go with their submission (ON DELETE CASCADE).
     submissions: await inBatches(async () =>
       count(
         await db
@@ -98,49 +138,6 @@ export async function runPurgePass(ctx: AppContext): Promise<PurgeCounts> {
               .selectFrom('submissions')
               .select('id')
               .where('accepted_at', '<', submissionCutoff)
-              .limit(PURGE_BATCH),
-          )
-          .executeTakeFirst(),
-      ),
-    ),
-    // Registrations go with their device (ON DELETE CASCADE). A device with a submission left is kept.
-    devices: await inBatches(async () =>
-      count(
-        await db
-          .deleteFrom('devices')
-          .where(
-            'id',
-            'in',
-            db
-              .selectFrom('devices')
-              .select('devices.id')
-              .where('token_expires_at', '<', deviceCutoff)
-              .where(({ not, exists, selectFrom }) =>
-                not(
-                  exists(
-                    selectFrom('submissions')
-                      .select('submissions.id')
-                      .whereRef('submissions.device_id', '=', 'devices.id'),
-                  ),
-                ),
-              )
-              .limit(PURGE_BATCH),
-          )
-          .executeTakeFirst(),
-      ),
-    ),
-    // A device that keeps renewing never expires, so its registration rows are aged out on their own.
-    registrations: await inBatches(async () =>
-      count(
-        await db
-          .deleteFrom('device_registrations')
-          .where(
-            'id',
-            'in',
-            db
-              .selectFrom('device_registrations')
-              .select('id')
-              .where('created_at', '<', submissionCutoff)
               .limit(PURGE_BATCH),
           )
           .executeTakeFirst(),
@@ -172,18 +169,6 @@ export async function runPurgePass(ctx: AppContext): Promise<PurgeCounts> {
               .where('expires_at', 'is not', null)
               .where('expires_at', '<=', now)
               .limit(PURGE_BATCH),
-          )
-          .executeTakeFirst(),
-      ),
-    ),
-    nonces: await inBatches(async () =>
-      count(
-        await db
-          .deleteFrom('nonces')
-          .where(
-            'nonce',
-            'in',
-            db.selectFrom('nonces').select('nonce').where('expires_at', '<=', now).limit(PURGE_BATCH),
           )
           .executeTakeFirst(),
       ),

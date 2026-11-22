@@ -43,6 +43,24 @@ export interface CallPriority {
   isDeleted: boolean;
 }
 
+/** One row of Core's GetAllUnitStatuses: a unit's latest status, destination and position. */
+export interface CoreUnitStatus {
+  /** Core UnitId, as a string. */
+  unitId: string;
+  /** Core's unit type name. */
+  unitType: string | null;
+  /** Core's status text, e.g. "En Route". */
+  statusText: string | null;
+  /** 1 station, 2 call, 3 POI. */
+  destinationType: number | null;
+  /** As a string. */
+  destinationId: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  /** ISO 8601 of the status. */
+  timestamp: string | null;
+}
+
 export interface CoreClient {
   saveCall(
     call: SaveCallInput,
@@ -56,4 +74,15 @@ export interface CoreClient {
   getCallPriorities(): Promise<CoreResult<{ priorities: CallPriority[] }>>;
   /** Keys with Required: true in the new-call field policy. */
   getFieldPolicy(): Promise<CoreResult<{ requiredKeys: string[] }>>;
+  /**
+   * Attaches a file to a call (CallFiles/SaveCallFile). `call_closed` means Core refused because the
+   * call is no longer active or pending (or is gone): do not retry. `idempotencyKey` is sent as the
+   * `Idempotency-Key` header (the relay uses the recording id), so a retry never attaches twice.
+   */
+  saveCallFile(
+    input: { callId: string; name: string; data: Buffer; idempotencyKey: string },
+    opts?: { timeoutMs?: number },
+  ): Promise<CoreResult<{ fileId: string }> | { kind: 'call_closed' }>;
+  /** Every unit's latest status in the department. Empty when Core says not_found. */
+  getAllUnitStatuses(): Promise<CoreResult<{ units: CoreUnitStatus[] }>>;
 }

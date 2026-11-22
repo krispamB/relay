@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Agreed in a design review on 2026-11-22. Not built. |
+| **Status** | Agreed in a design review on 2026-11-22. Built on `feat/live-sos` (slices 1–9; work split in `live-sos-seams.md`). Not yet run against a real Core. |
 | **Replaces** | The device-token and attestation model of `app-api-contract.md` and `attestation-contract.md`, and email sign-in in `auth-contract.md`. |
 | **Core facts** | `sos-app-PRD.md` §15 (Core as of 2026-11-19) and the v4 OpenAPI document at `{RESGRID_API_BASE}/swagger/v4/swagger.json`. Where this plan and Core disagree, Core wins and this plan is fixed. |
 
@@ -66,10 +66,10 @@ The department key needs exactly: `calls.create`, `calls.read`, `calls.update`, 
 | `POST CallFiles/SaveCallFile` | `calls.update` | Attach a recording. Body `{ CallId, UserId, Type: 1, Name, Data }`; `Data` is base64. Core ignores `UserId` and records the managing user, but the field is required, so send a fixed placeholder. 201 `{ Id }`. Active or pending calls only. |
 | `GET UnitStatus/GetAllUnitStatuses` | `units.read` | Units heading to a call (D12) and their coordinates. |
 
-`SaveCallFile` documents no `Idempotency-Key` (§15.3 says only `SaveCall` honours one; confirm in
-Core before slice 5). Without it, a retry after a lost 201 can attach the audio twice. The
-relay accepts that risk (a duplicate audio file is harmless to a dispatcher) and keeps the retry
-count low (§4.4). `GetFilesForCall` is not open to the key, so the relay cannot check first.
+`SaveCallFile` documents no `Idempotency-Key`, but a live Core honours one (live checklist,
+2026-11-22). The relay sends the recording id as the key on every attempt, so a retry after a lost
+201 does not attach the audio twice. A call that does not exist answers HTTP 200 with `Status`
+`not_found`, which the relay reads as closed, as it does a 400.
 
 ### 2.3 Mock Core
 
@@ -249,7 +249,7 @@ interval.
 
 ## 6. Data model changes
 
-One migration (`006_live_sos.sql`), in this order:
+`006_live_sos.sql` holds all of the following, in this order. Two small migrations followed in the build: `007_live_poll_floor.sql` (`submissions.last_poll_at`, the 15 s per-call floor across instances) and `008_live_socket.sql` (`submissions.live_stored_at` for the 1-per-5 s location limit, and a `token_families` trigger that NOTIFYs `session_revoked`).
 
 - `users`: drop `email`.
 - `signin_attempts`: `email_hash` becomes `phone_hash`.

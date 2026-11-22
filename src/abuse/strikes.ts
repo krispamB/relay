@@ -1,16 +1,18 @@
 /**
- * Hoax strikes, automatic device blocks and phone-number alerts. sos-relay-PRD.md §9.2, §8.5.
+ * Hoax strikes, automatic user blocks and phone-number alerts. sos-relay-PRD.md §9.2, §8.5;
+ * docs/live-sos-plan.md D3.
  *
- * A strike is recorded for the device and for the phone hash when the poller sees a real
- * submission's call closed as Unfounded (3) or False alarm (7).
+ * A strike is recorded for the user and for the phone hash when the poller sees a real
+ * submission's call closed as Unfounded (3) or False alarm (7). Strikes have no foreign key, so a
+ * phone strike outlives the account: a new account with the same phone keeps it.
  *
- * - **Device:** enough live strikes block the device automatically. When the call later leaves the
- *   hoax state, that submission's strikes are removed, and an automatic device block they made
+ * - **User:** enough live strikes block the user automatically. When the call later leaves the
+ *   hoax state, that submission's strikes are removed, and an automatic user block they made
  *   possible is lifted (see removeStrikes).
- * - **Phone number:** never blocked automatically. The number is typed by the caller and unverified,
- *   so anyone with a few attested devices could otherwise get a stranger's number blocked. Reaching
- *   the threshold raises a warning alert instead, and an operator decides (manual block through the
- *   admin API).
+ * - **Phone number:** never blocked automatically. The number is the account's, but not yet verified
+ *   (no SMS check in the pilot), so anyone could sign up with a stranger's number and get it blocked.
+ *   Reaching the threshold raises a warning alert instead, and an operator decides (manual block
+ *   through the admin API).
  *
  * The functions that write run inside the caller's transaction and return what happened; the caller
  * raises alerts after the commit with raiseStrikeAlerts.
@@ -26,7 +28,7 @@ import { newBlockId } from '../ids.js';
 export interface StrikeSubmission {
   id: string;
   reference: string;
-  device_id: string;
+  user_id: string;
   /** Keyed hash of the phone number; never the number itself. */
   phone_hash: string;
 }
@@ -40,10 +42,10 @@ export interface StrikeLimits {
 /** Something this module did that an operator should hear about. */
 export type StrikeOutcome =
   | {
-      /** An automatic device block was applied or lifted. */
-      kind: 'device_block_applied' | 'device_block_lifted';
+      /** An automatic user block was applied or lifted. */
+      kind: 'user_block_applied' | 'user_block_lifted';
       blockId: string;
-      deviceId: string;
+      userId: string;
       liveStrikes: number;
       /** The submission whose closure caused the change (for the alert's reference and receiptId). */
       submissionId: string;
@@ -120,8 +122,8 @@ async function insertStrike(
 }
 
 /**
- * Records one strike for the device and one for the phone hash (idempotent per submission).
- * A device that reaches the threshold with no live block is blocked automatically. A phone number
+ * Records one strike for the user and one for the phone hash (idempotent per submission).
+ * A user that reaches the threshold with no live block is blocked automatically. A phone number
  * that reaches it with no live block is reported, never blocked. Both happen only when this call
  * inserted a new strike, so the poller seeing the same hoax state again reports nothing. A threshold
  * of 0 records strikes and neither blocks nor reports. Run inside the caller's transaction.
@@ -134,17 +136,17 @@ export async function recordHoaxStrikes(
 ): Promise<StrikeOutcome[]> {
   const outcomes: StrikeOutcome[] = [];
 
-  await lockSubject(trx, 'device', sub.device_id);
-  if ((await insertStrike(trx, 'device', sub.device_id, sub, now, limits)) && limits.hoaxStrikesToBlock > 0) {
-    const live = await liveStrikeCount(trx, 'device', sub.device_id, now);
-    if (live >= limits.hoaxStrikesToBlock && !(await liveBlockExists(trx, 'device', sub.device_id, now))) {
+  await lockSubject(trx, 'user', sub.user_id);
+  if ((await insertStrike(trx, 'user', sub.user_id, sub, now, limits)) && limits.hoaxStrikesToBlock > 0) {
+    const live = await liveStrikeCount(trx, 'user', sub.user_id, now);
+    if (live >= limits.hoaxStrikesToBlock && !(await liveBlockExists(trx, 'user', sub.user_id, now))) {
       const blockId = newBlockId(now.getTime());
       await trx
         .insertInto('blocks')
         .values({
           id: blockId,
-          subject_type: 'device',
-          subject: sub.device_id,
+          subject_type: 'user',
+          subject: sub.user_id,
           reason: `automatic: ${live} hoax strikes`,
           source: 'automatic',
           created_at: now,
@@ -152,9 +154,9 @@ export async function recordHoaxStrikes(
         })
         .execute();
       outcomes.push({
-        kind: 'device_block_applied',
+        kind: 'user_block_applied',
         blockId,
-        deviceId: sub.device_id,
+        userId: sub.user_id,
         liveStrikes: live,
         submissionId: sub.id,
         reference: sub.reference,
@@ -181,8 +183,8 @@ export async function recordHoaxStrikes(
 }
 
 /**
- * Removes the strikes of one submission (its call left the hoax state). Then, if the device is now
- * below the threshold, lifts the live automatic device blocks created since that strike: the strike
+ * Removes the strikes of one submission (its call left the hoax state). Then, if the user is now
+ * below the threshold, lifts the live automatic user blocks created since that strike: the strike
  * was part of what caused them, and the dispatcher has taken back the judgement they rested on.
  * Phone strikes are removed too; there is no automatic phone block to lift. Manual blocks are never
  * touched. Run inside the caller's transaction.
@@ -202,21 +204,21 @@ export async function removeStrikes(
     .where('submission_id', '=', sub.id)
     .execute();
 
-  await lockSubject(trx, 'device', sub.device_id);
+  await lockSubject(trx, 'user', sub.user_id);
   const removed = await trx
     .deleteFrom('strikes')
-    .where('subject_type', '=', 'device')
+    .where('subject_type', '=', 'user')
     .where('submission_id', '=', sub.id)
     .returning(['subject', 'created_at'])
     .executeTakeFirst();
   if (!removed) return outcomes;
 
-  const live = await liveStrikeCount(trx, 'device', removed.subject, now);
+  const live = await liveStrikeCount(trx, 'user', removed.subject, now);
   if (limits.hoaxStrikesToBlock > 0 && live >= limits.hoaxStrikesToBlock) return outcomes;
 
   const lifted = await trx
     .deleteFrom('blocks')
-    .where('subject_type', '=', 'device')
+    .where('subject_type', '=', 'user')
     .where('subject', '=', removed.subject)
     .where('source', '=', 'automatic')
     .where('created_at', '>=', removed.created_at)
@@ -225,9 +227,9 @@ export async function removeStrikes(
     .execute();
   for (const b of lifted) {
     outcomes.push({
-      kind: 'device_block_lifted',
+      kind: 'user_block_lifted',
       blockId: b.id,
-      deviceId: removed.subject,
+      userId: removed.subject,
       liveStrikes: live,
       submissionId: sub.id,
       reference: sub.reference,
@@ -236,7 +238,7 @@ export async function removeStrikes(
   return outcomes;
 }
 
-/** Warning alerts for device blocks and phone thresholds. Call after the transaction commits. */
+/** Warning alerts for user blocks and phone thresholds. Call after the transaction commits. */
 export async function raiseStrikeAlerts(
   ctx: Pick<AppContext, 'alerts' | 'log'>,
   outcomes: StrikeOutcome[],
@@ -260,7 +262,7 @@ export async function raiseStrikeAlerts(
         message:
           `The phone number given with SOS ${o.reference} has ${o.liveStrikes} unfounded or false-alarm ` +
           `closures in the last ${o.strikeTtlDays} days (threshold ${o.threshold}). It was not blocked: ` +
-          'phone numbers are unverified. Review the calls and block the number through the admin API if warranted.',
+          'phone numbers are not verified yet. Review the calls and block the number through the admin API if warranted.',
         reference: o.reference,
         receiptId: o.submissionId,
       });
@@ -269,18 +271,18 @@ export async function raiseStrikeAlerts(
     ctx.log.warn(
       {
         blockId: o.blockId,
-        subjectType: 'device',
-        deviceId: o.deviceId,
+        subjectType: 'user',
+        userId: o.userId,
         liveStrikes: o.liveStrikes,
         receiptId: o.submissionId,
         reference: o.reference,
       },
-      o.kind === 'device_block_applied' ? 'automatic block applied' : 'automatic block lifted',
+      o.kind === 'user_block_applied' ? 'automatic block applied' : 'automatic block lifted',
     );
     const message =
-      o.kind === 'device_block_applied'
-        ? `Automatic block ${o.blockId} applied to device ${o.deviceId} after ${o.liveStrikes} hoax closures (latest: SOS ${o.reference})`
-        : `Automatic block ${o.blockId} on device ${o.deviceId} lifted: the hoax closure of SOS ${o.reference} was reversed in Core`;
+      o.kind === 'user_block_applied'
+        ? `Automatic block ${o.blockId} applied to user ${o.userId} after ${o.liveStrikes} hoax closures (latest: SOS ${o.reference})`
+        : `Automatic block ${o.blockId} on user ${o.userId} lifted: the hoax closure of SOS ${o.reference} was reversed in Core`;
     await ctx.alerts.raise({
       severity: 'warning',
       code: ALERT_CODES.automaticBlock,

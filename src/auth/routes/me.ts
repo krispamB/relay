@@ -12,7 +12,6 @@ const User = Type.Object(
     id: Type.String(),
     fullName: Type.String(),
     phone: Type.String(),
-    email: Type.String(),
     phoneVerified: Type.Literal(false, { description: 'Always false in the demo (contract §8).' }),
     createdAt: Type.String({ format: 'date-time' }),
   },
@@ -52,7 +51,7 @@ export async function meRoutes(app: PublicApp, ctx: AppContext): Promise<void> {
       const auth = await requireUser(ctx, keys, req);
       const user = await ctx.db
         .selectFrom('users')
-        .select(['id', 'full_name', 'phone', 'email', 'created_at'])
+        .select(['id', 'full_name', 'phone', 'created_at'])
         .where('id', '=', auth.userId)
         .executeTakeFirst();
       // The family check already treats a deleted user as session_revoked. This covers a user row
@@ -63,7 +62,6 @@ export async function meRoutes(app: PublicApp, ctx: AppContext): Promise<void> {
           id: user.id,
           fullName: user.full_name,
           phone: user.phone,
-          email: user.email,
           phoneVerified: false as const,
           createdAt: rfc3339(user.created_at),
         },

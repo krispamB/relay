@@ -1,11 +1,18 @@
-/** Submission row → Core SaveCall input. sos-relay-PRD.md §8.2, §13.3; integration.md §4.2, §7. Pure. */
+/**
+ * Submission row → Core SaveCall input. sos-relay-PRD.md §8.2, §13.3; integration.md §4.2, §7;
+ * docs/live-sos-plan.md §3.2. Pure.
+ *
+ * One tap: the call's Name is fixed, its Nature is the relay's text stored with the submission
+ * (SOS_NATURE_TEXT), ContactName is the account's full name and ContactInfo the account's phone.
+ */
 import type { Config } from '../config.js';
 import type { SaveCallInput } from '../core/types.js';
 import type { Submission } from '../db/types.js';
 
 export const PLACEHOLDER_ADDRESS = 'See map location';
 export const PLACEHOLDER_NAME = 'Unknown caller';
-export const NAME_MAX = 100;
+/** The Name of every SOS call. */
+export const CALL_NAME = '[PUBLIC SOS] SOS';
 
 /** relay_state.required_address / required_name: Core's field policy requires the field. */
 export interface FieldPolicyFlags {
@@ -18,9 +25,7 @@ export type MappingSubmission = Pick<
   | 'id'
   | 'reference'
   | 'nature_label'
-  | 'details'
   | 'phone'
-  | 'name'
   | 'lat'
   | 'lon'
   | 'accuracy_m'
@@ -28,7 +33,10 @@ export type MappingSubmission = Pick<
   | 'location_source'
   | 'address'
   | 'accepted_at'
->;
+> & {
+  /** The account's full name, read with the submission at delivery time. */
+  contact_name: string | null;
+};
 
 function text(v: string | null | undefined): string | undefined {
   if (v === null || v === undefined) return undefined;
@@ -85,8 +93,6 @@ export function buildSaveCallInput(
   resgrid: Pick<Config['resgrid'], 'callTypeName' | 'priorityId'>,
   policy: FieldPolicyFlags,
 ): SaveCallInput {
-  const label = sub.nature_label.trim();
-  const details = text(sub.details);
   const geolocation = formatGeolocation(sub.lat, sub.lon);
 
   let address = text(sub.address);
@@ -94,14 +100,14 @@ export function buildSaveCallInput(
   if (address === undefined && policy.requiredAddress && geolocation !== undefined) {
     address = PLACEHOLDER_ADDRESS;
   }
-  let contactName = text(sub.name);
+  let contactName = text(sub.contact_name);
   if (contactName === undefined && policy.requiredName) contactName = PLACEHOLDER_NAME;
 
   const input: SaveCallInput = {
     Priority: resgrid.priorityId,
     Type: text(resgrid.callTypeName),
-    Name: `[PUBLIC SOS] ${label}`.slice(0, NAME_MAX),
-    Nature: details ? `${label}. ${details}` : label,
+    Name: CALL_NAME,
+    Nature: sub.nature_label.trim(),
     Geolocation: geolocation,
     Address: address,
     ContactName: contactName,

@@ -9,10 +9,28 @@ import { request } from 'undici';
 import { type Clock, systemClock } from '../clock.js';
 import type { Logger } from '../logger.js';
 import { METRICS, type Metrics } from '../metrics.js';
-import type { CallPriority, CallStateResult, CoreClient, CoreResult, SaveCallInput } from './types.js';
+import type {
+  CallPriority,
+  CallStateResult,
+  CoreClient,
+  CoreResult,
+  CoreUnitStatus,
+  SaveCallInput,
+} from './types.js';
 
 export const SAVE_CALL_TIMEOUT_MS = 6000;
 export const READ_TIMEOUT_MS = 5000;
+/** A recording is far bigger than a SaveCall body, so it gets longer. */
+export const SAVE_CALL_FILE_TIMEOUT_MS = 20000;
+/**
+ * SaveCallFile's declared answers (Core v4 swagger): 200 / 201 `SaveCallFileResult { Id }` and 400
+ * `ProblemDetails`. Core refuses a call that is not active or pending with that 400. Nothing else is
+ * declared, so a 404 (wrong base path, removed route) stays `rejected` and alerts instead of silently
+ * dropping the recording.
+ */
+const CALL_CLOSED_STATUSES: ReadonlySet<number> = new Set([400]);
+/** Core ignores SaveCallFile's UserId (the file is recorded under the department's managing user) but requires the field. */
+export const SAVE_CALL_FILE_USER_ID = '00000000-0000-0000-0000-000000000000';
 
 /** integration.md §4.2: the only keys that may ever appear in a SaveCall body. */
 export const SAVE_CALL_FIELDS = [
@@ -117,8 +135,60 @@ function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+function textOrNull(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const t = v.trim();
+  return t === '' ? null : t;
+}
+
+/** A string or number id as a non-empty string, else null. */
+function idOrNull(v: unknown): string | null {
+  if (typeof v === 'number') return Number.isFinite(v) ? String(v) : null;
+  return textOrNull(v);
+}
+
+/** A finite number, or a string holding one; anything else is null. */
+function numberOrNull(v: unknown): number | null {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/** ISO 8601 (UTC) for a Core timestamp. A value with no zone is read as UTC. Unparseable → null. */
+function isoOrNull(v: unknown): string | null {
+  const t = textOrNull(v);
+  if (t === null) return null;
+  const hasZone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(t);
+  const ms = Date.parse(hasZone ? t : `${t}Z`);
+  return Number.isNaN(ms) ? null : new Date(ms).toISOString();
+}
+
+/** One GetAllUnitStatuses row (integration of sos-app-PRD.md §15.4). Null when the row has no UnitId. */
+export function mapUnitStatus(row: unknown): CoreUnitStatus | null {
+  if (!isObject(row)) return null;
+  const unitId = idOrNull(row.UnitId);
+  if (unitId === null) return null;
+  const destinationType = numberOrNull(row.DestinationType);
+  return {
+    unitId,
+    unitType: textOrNull(row.Type),
+    statusText: textOrNull(row.State),
+    destinationType: destinationType !== null && Number.isInteger(destinationType) ? destinationType : null,
+    destinationId: idOrNull(row.DestinationId),
+    latitude: numberOrNull(row.Latitude),
+    longitude: numberOrNull(row.Longitude),
+    // Core sends both Timestamp (department-local) and TimestampUtc; only the UTC one is safe to read.
+    timestamp: isoOrNull(row.TimestampUtc),
+  };
+}
+
 type Endpoint =
   | 'SaveCall'
+  | 'SaveCallFile'
+  | 'GetAllUnitStatuses'
   | 'GetCall'
   | 'GetPendingCalls'
   | 'GetNewCallFieldPolicy'
@@ -220,18 +290,23 @@ export function createCoreClient(cfg: CoreClientConfig, deps: CoreClientDeps): C
     }
   }
 
-  async function call<T>(
+  /**
+   * `onFailure` lets an endpoint turn a failure status into its own outcome (for example SaveCallFile's
+   * `call_closed`) before the generic classification of integration.md §4.6 applies.
+   */
+  async function call<T, X extends { kind: string } = never>(
     endpoint: Endpoint,
     path: string,
     init: { method: 'GET' | 'POST'; body?: string; idempotencyKey?: string; timeoutMs: number },
-    onSuccess: (statusCode: number, json: Record<string, unknown>) => CoreResult<T>,
+    onSuccess: (statusCode: number, json: Record<string, unknown>) => CoreResult<T> | X,
     logFields: Record<string, unknown> = {},
-  ): Promise<CoreResult<T>> {
+    onFailure?: (statusCode: number) => X | undefined,
+  ): Promise<CoreResult<T> | X> {
     const started = performance.now();
     const raw = await send(path, init);
     const seconds = (performance.now() - started) / 1000;
 
-    let result: CoreResult<T>;
+    let result: CoreResult<T> | X;
     let requestId: string | undefined;
     if (raw.type === 'response' && raw.statusCode >= 200 && raw.statusCode < 300) {
       const json = parseJson(raw.text);
@@ -242,10 +317,12 @@ export function createCoreClient(cfg: CoreClientConfig, deps: CoreClientDeps): C
         result = onSuccess(raw.statusCode, json);
       }
     } else {
-      result = classifyFailure(raw);
+      const custom = raw.type === 'response' ? onFailure?.(raw.statusCode) : undefined;
+      result = custom ?? classifyFailure(raw);
     }
     requestId ??= headerRequestId(raw);
-    if (result.kind === 'ok' && requestId !== undefined) result = { ...result, requestId };
+    if (result.kind === 'ok' && requestId !== undefined)
+      result = { ...(result as CoreResult<T>), requestId } as CoreResult<T>;
 
     deps.metrics.inc(METRICS.coreCalls, { endpoint, result: result.kind });
     deps.metrics.observe(METRICS.coreLatency, seconds, { endpoint });
@@ -254,7 +331,7 @@ export function createCoreClient(cfg: CoreClientConfig, deps: CoreClientDeps): C
       endpoint,
       httpStatus: raw.type === 'response' ? raw.statusCode : undefined,
       result: result.kind,
-      reason: result.kind === 'retryable' ? result.reason : undefined,
+      reason: result.kind === 'retryable' ? (result as { reason: string }).reason : undefined,
       requestId,
       durationMs: Math.round(seconds * 1000),
     };
@@ -375,6 +452,60 @@ export function createCoreClient(cfg: CoreClientConfig, deps: CoreClientDeps): C
           priorities.push({ id, isDeleted: p.IsDeleted === true });
         }
         return { kind: 'ok', data: { priorities } };
+      });
+    },
+
+    saveCallFile(input, opts) {
+      // The body holds the audio. It is never logged: logFields below names the call and file only.
+      const body = JSON.stringify({
+        CallId: input.callId,
+        UserId: SAVE_CALL_FILE_USER_ID,
+        Type: 1,
+        Name: input.name,
+        Data: input.data.toString('base64'),
+      });
+      return call<{ fileId: string }, { kind: 'call_closed' }>(
+        'SaveCallFile',
+        'CallFiles/SaveCallFile',
+        {
+          method: 'POST',
+          body,
+          // Honoured by a live Core (live checklist, 2026-11-22): a retry after a lost 201 gets the same file.
+          idempotencyKey: input.idempotencyKey,
+          timeoutMs: opts?.timeoutMs ?? SAVE_CALL_FILE_TIMEOUT_MS,
+        },
+        (statusCode, json) => {
+          if (statusCode !== 200 && statusCode !== 201) {
+            return { kind: 'retryable', reason: `unexpected HTTP ${statusCode}` };
+          }
+          // A live Core answers a call that does not exist with HTTP 200, Status "not_found", Id null
+          // (live checklist, 2026-11-22). The file can never go on that call: same as closed.
+          if (json.Status === 'not_found') return { kind: 'call_closed' };
+          const id = json.Id;
+          if ((typeof id !== 'string' && typeof id !== 'number') || String(id).trim() === '') {
+            return { kind: 'retryable', reason: 'success without Id' };
+          }
+          return { kind: 'ok', data: { fileId: String(id) } };
+        },
+        // `size`, not `bytes`: the logger redacts any `bytes` key (audio).
+        { callId: input.callId, size: input.data.length },
+        // 400 ProblemDetails is Core's only declared refusal (CALL_CLOSED_STATUSES); a gone call is the 200 not_found above.
+        (statusCode) => (CALL_CLOSED_STATUSES.has(statusCode) ? { kind: 'call_closed' as const } : undefined),
+      );
+    },
+
+    getAllUnitStatuses() {
+      return read('GetAllUnitStatuses', 'UnitStatus/GetAllUnitStatuses', (json) => {
+        if (json.Status === 'success' && !Array.isArray(json.Data)) {
+          return { kind: 'retryable', reason: 'Data is not an array' };
+        }
+        const data = Array.isArray(json.Data) ? json.Data : [];
+        const units: CoreUnitStatus[] = [];
+        for (const row of data) {
+          const unit = mapUnitStatus(row);
+          if (unit !== null) units.push(unit);
+        }
+        return { kind: 'ok', data: { units } };
       });
     },
 

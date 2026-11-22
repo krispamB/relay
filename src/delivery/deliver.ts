@@ -10,6 +10,7 @@ import type { CoreResult } from '../core/types.js';
 import type { Db } from '../db/index.js';
 import type { Submission, SubmissionStatus, SubmissionUpdate } from '../db/types.js';
 import { safeError } from '../errors.js';
+import { bumpLiveVersion } from '../live/version.js';
 import { METRICS } from '../metrics.js';
 import { pauseDelivery } from '../state.js';
 import { nextAttemptAt } from './backoff.js';
@@ -39,7 +40,7 @@ export interface AttemptOptions {
    * The inline attempt of `POST /v1/sos` (PRD §8.1). When delivery is paused before the attempt, or
    * Core answers 401/403 to it, the caller is about to be told 503 ("not sent, call instead"), so the
    * submission is marked `failed` rather than left queued: it must not reach dispatch later when an
-   * operator resumes, nor hold the device's one open SOS. Without this flag (the worker) such a
+   * operator resumes, nor hold the user's one open SOS. Without this flag (the worker) such a
    * submission stays queued, as before.
    */
   inline?: boolean;
@@ -50,7 +51,10 @@ export interface AttemptOptions {
   dueOnly?: boolean;
 }
 
-/** Runs inside the claiming transaction: status change, its event row, updated_at. */
+/**
+ * Runs inside the claiming transaction: status change, its event row, updated_at, and the live
+ * version bump the snapshot needs (docs/live-sos-plan.md §5.3).
+ */
 async function transition(
   trx: Db,
   row: Pick<Submission, 'id' | 'status'>,
@@ -68,6 +72,7 @@ async function transition(
     .insertInto('submission_events')
     .values({ submission_id: row.id, from_status: row.status, to_status: to, cause, at: now })
     .execute();
+  await bumpLiveVersion(trx, row.id);
 }
 
 export function isPastHardStop(acceptedAt: Date, now: Date): boolean {
@@ -90,6 +95,7 @@ export async function failExpiredInTrx(trx: Db, row: Submission, now: Date): Pro
     .insertInto('submission_events')
     .values({ submission_id: row.id, from_status: 'queued', to_status: 'failed', cause: 'expired', at: now })
     .execute();
+  await bumpLiveVersion(trx, row.id);
 }
 
 /**
@@ -224,7 +230,14 @@ export async function attemptDelivery(
       return { kind: 'not_sent_paused', row };
     }
 
-    const input = buildSaveCallInput(row, ctx.config.resgrid, {
+    // ContactName is the account's name (docs/live-sos-plan.md §3.2). The user row cannot be gone:
+    // deleting a user deletes their submissions.
+    const user = await trx
+      .selectFrom('users')
+      .select('full_name')
+      .where('id', '=', row.user_id)
+      .executeTakeFirst();
+    const input = buildSaveCallInput({ ...row, contact_name: user?.full_name ?? null }, ctx.config.resgrid, {
       requiredAddress: state.required_address,
       requiredName: state.required_name,
     });

@@ -10,6 +10,27 @@ node dist/mock-core/main.js      # Docker
 Env: `PORT` (4010), `HOST` (0.0.0.0), `MOCK_CORE_API_KEY` (default `rgk_AbCdEfGh_` + 43 `s`). When run standalone (`main.ts`), it seeds the call
 type `Public SOS` and priority `3` / `High`. One log line per request, never the API key.
 
+Endpoints (all under `/api/v4/`): `Calls/SaveCall`, `Calls/GetCall`, `Calls/GetPendingCalls`,
+`Calls/GetNewCallFieldPolicy`, `CallTypes/GetAllCallTypes`, `CallPriorities/GetAllCallPriorites`,
+`CallFiles/SaveCallFile` and `UnitStatus/GetAllUnitStatuses`. The key holds `calls.create`,
+`calls.read`, `calls.update`, `reference.read` and `units.read` unless `PUT /__control/scopes` says otherwise.
+
+`CallFiles/SaveCallFile` takes `{ CallId, UserId, Type, Name, Data }` (all required, `Data` strict base64) and
+answers 201 `{ Id }`. It keeps the call id, name and decoded size, never the bytes (`GET /__control/files`),
+and the request log shows `Data` as a character count. Measured against a live Core on 2026-11-22 and copied
+here: an `Idempotency-Key` is honoured (the same key returns the same `Id` and stores one file; without a key,
+sending twice stores two), and a call that does not exist or was deleted gets **HTTP 200** with `Status`
+`not_found` and `Id: null`. A call that is not active or pending (state 1 to 7) gets **HTTP 400**
+`ProblemDetails`, as the v4 swagger declares; real Core's answer for a closed call is not yet measured.
+The relay's client reads both as `call_closed`, and `scripts/live-checklist.ts` check 15 records what a real
+Core answers.
+
+`UnitStatus/GetAllUnitStatuses` returns the list set with `PUT /__control/unit-statuses` (or the
+`unitStatuses` option), rows exactly as given, so a test can send numbers as strings or nulls. Core's
+fields are `UnitId`, `Type`, `State` (the status text), `DestinationType` (1 station, 2 call, 3 POI),
+`DestinationId`, `Latitude`, `Longitude` and `Timestamp`. An empty list is HTTP 200 with `Status: "not_found"`.
+In-process, `control.setUnitStatuses(rows)` moves a unit between polls.
+
 Point the relay at it: `RESGRID_API_BASE=http://mock-core:4010`, `RESGRID_API_KEY=<same key>`.
 
 ## Control endpoints
@@ -17,24 +38,26 @@ Point the relay at it: `RESGRID_API_BASE=http://mock-core:4010`, `RESGRID_API_KE
 JSON, no authentication, not recorded as Core requests. Inputs are camelCase except stored Core data
 (PascalCase). Errors are `400 {"error": "..."}`.
 
-| Method and path                        | Body / query                                                                                                                                     | Effect                                                                   |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
-| `GET /__control/state`                 |                                                                                                                                                  | Config summary and counts                                                |
-| `POST /__control/reset`                |                                                                                                                                                  | Back to start-up config; drops calls, requests, faults, idempotency keys |
-| `GET /__control/calls`                 | `?includeDeleted=true`                                                                                                                           | All stored calls                                                         |
-| `GET /__control/calls/:id`             |                                                                                                                                                  | One call (404 if unknown)                                                |
-| `POST /__control/calls/:id/state`      | `{"state": 0}`                                                                                                                                   | Dispatcher action: 0 dispatch, 1-7 close variants, 8 re-pend             |
-| `DELETE /__control/calls/:id`          |                                                                                                                                                  | Dispatcher deletes the call                                              |
-| `GET /__control/requests`              | `?endpoint=Calls/SaveCall&method=POST`                                                                                                           | Received requests (API key redacted here)                                |
-| `DELETE /__control/requests`           |                                                                                                                                                  | Clear the request log                                                    |
-| `PUT /__control/call-types`            | `["Public SOS", {"Id": 5, "Name": "EMS"}]`                                                                                                       | Replace call types ("No Type" is always added)                           |
-| `PUT /__control/priorities`            | `[{"Id": 3, "Name": "High", "IsDeleted": false}]`                                                                                                | Replace priorities                                                       |
-| `PUT /__control/field-policy`          | `{"Rules": [{"Key": "address", "Required": true}]}` or a bare array                                                                              | Replace policy rules                                                     |
-| `PUT /__control/scopes`                | `["calls.read", "reference.read"]`                                                                                                               | Granted scopes                                                           |
-| `PUT /__control/api-key`               | `{"apiKey": "rgk_..."}`                                                                                                                          | Change the accepted key                                                  |
-| `PUT /__control/deleted-call-behavior` | `{"mode": "not_found"}` or `"last_state"`                                                                                                        | What GetCall returns for a deleted call                                  |
-| `POST /__control/faults`               | `{"endpoint": "Calls/SaveCall", "count": 1, "status": 503, "body": "x", "retryAfter": 5, "delayMs": 0, "drop": false, "afterProcessing": false}` | Fault the next `count` requests; endpoint `*` = any                      |
-| `DELETE /__control/faults`             |                                                                                                                                                  | Remove pending faults                                                    |
+| Method and path                        | Body / query                                                                                                                                                     | Effect                                                                   |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `GET /__control/state`                 |                                                                                                                                                                  | Config summary and counts                                                |
+| `POST /__control/reset`                |                                                                                                                                                                  | Back to start-up config; drops calls, requests, faults, idempotency keys |
+| `GET /__control/calls`                 | `?includeDeleted=true`                                                                                                                                           | All stored calls                                                         |
+| `GET /__control/calls/:id`             |                                                                                                                                                                  | One call (404 if unknown)                                                |
+| `POST /__control/calls/:id/state`      | `{"state": 0}`                                                                                                                                                   | Dispatcher action: 0 dispatch, 1-7 close variants, 8 re-pend             |
+| `DELETE /__control/calls/:id`          |                                                                                                                                                                  | Dispatcher deletes the call                                              |
+| `GET /__control/files`                 | `?callId=1000`                                                                                                                                                   | Files attached with SaveCallFile (id, call id, name, decoded size)       |
+| `PUT /__control/unit-statuses`         | `[{"UnitId": 214, "Type": "Engine", "State": "En Route", "DestinationType": 2, "DestinationId": 1000, "Latitude": 6.5, "Longitude": 3.3}]` or `{"Units": [...]}` | Replace the GetAllUnitStatuses list (empty = `not_found`)                |
+| `GET /__control/requests`              | `?endpoint=Calls/SaveCall&method=POST`                                                                                                                           | Received requests (API key redacted here)                                |
+| `DELETE /__control/requests`           |                                                                                                                                                                  | Clear the request log                                                    |
+| `PUT /__control/call-types`            | `["Public SOS", {"Id": 5, "Name": "EMS"}]`                                                                                                                       | Replace call types ("No Type" is always added)                           |
+| `PUT /__control/priorities`            | `[{"Id": 3, "Name": "High", "IsDeleted": false}]`                                                                                                                | Replace priorities                                                       |
+| `PUT /__control/field-policy`          | `{"Rules": [{"Key": "address", "Required": true}]}` or a bare array                                                                                              | Replace policy rules                                                     |
+| `PUT /__control/scopes`                | `["calls.read", "reference.read"]`                                                                                                                               | Granted scopes                                                           |
+| `PUT /__control/api-key`               | `{"apiKey": "rgk_..."}`                                                                                                                                          | Change the accepted key                                                  |
+| `PUT /__control/deleted-call-behavior` | `{"mode": "not_found"}` or `"last_state"`                                                                                                                        | What GetCall returns for a deleted call                                  |
+| `POST /__control/faults`               | `{"endpoint": "Calls/SaveCall", "count": 1, "status": 503, "body": "x", "retryAfter": 5, "delayMs": 0, "drop": false, "afterProcessing": false}`                 | Fault the next `count` requests; endpoint `*` = any                      |
+| `DELETE /__control/faults`             |                                                                                                                                                                  | Remove pending faults                                                    |
 
 Fault fields: `status` (respond with it), `body` (string = text, object = JSON), `retryAfter`, `delayMs`
 (alone, it only slows the request down), `drop` (kill the connection), `afterProcessing` (do the real work,
@@ -68,6 +91,13 @@ curl -s -XPUT $M/__control/field-policy -H 'content-type: application/json' \
 
 # Remove calls.create from the key
 curl -s -XPUT $M/__control/scopes -H 'content-type: application/json' -d '["calls.read","reference.read"]'
+
+# Put unit 214 on its way to call 1000, then move it
+curl -s -XPUT $M/__control/unit-statuses -H 'content-type: application/json' \
+  -d '[{"UnitId":214,"Type":"Engine","State":"En Route","DestinationType":2,"DestinationId":1000,"Latitude":6.5,"Longitude":3.3}]'
+
+# Which files did the relay attach?
+curl -s "$M/__control/files?callId=1000" | jq
 
 # Call the mock like Core
 curl -s "$M/api/v4/Calls/GetPendingCalls" -H "X-Resgrid-ApiKey: $KEY" | jq

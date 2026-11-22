@@ -1,11 +1,9 @@
-/** TypeBox schemas for `POST /v1/sos`. sos-relay-PRD.md §7, §7.4. They also drive the OpenAPI document. */
+/** TypeBox schemas for `POST /v1/sos`. docs/live-sos-plan.md §3.2. They also drive the OpenAPI document. */
 import { type Static, Type } from '@sinclair/typebox';
 import { UUID_PATTERN } from '../ids.js';
 
-/** Upper bounds applied after sanitising (PRD §7.4), in Unicode code points. */
+/** Upper bound applied after sanitising (PRD §7.4), in Unicode code points. */
 export const MAX_ADDRESS = 500;
-export const MAX_NAME = 100;
-export const MAX_DETAILS = 1000;
 
 export const SosLocation = Type.Object(
   {
@@ -25,22 +23,19 @@ export const SosLocation = Type.Object(
   },
 );
 
+/**
+ * One tap (plan D6): the intake and where the caller is. The name and the callback number are the
+ * account's, and the nature is the relay's fixed text, so none of them is a field.
+ */
 export const SosBody = Type.Object(
   {
     intakeCode: Type.String({ minLength: 1, maxLength: 64 }),
-    nature: Type.String({ minLength: 1, maxLength: 40, description: "One of the intake's nature ids." }),
-    phone: Type.String({
-      pattern: '^\\+[1-9][0-9]{1,14}$',
-      description: 'Callback number in E.164, valid per libphonenumber-js.',
-    }),
     location: Type.Optional(SosLocation),
     address: Type.Optional(
       Type.String({
         description: `Up to ${MAX_ADDRESS} characters after sanitising. Required when there is no usable location.`,
       }),
     ),
-    name: Type.Optional(Type.String({ description: `Up to ${MAX_NAME} characters after sanitising.` })),
-    details: Type.Optional(Type.String({ description: `Up to ${MAX_DETAILS} characters after sanitising.` })),
   },
   { additionalProperties: false },
 );
@@ -51,12 +46,6 @@ export const SosHeaders = Type.Object({
     pattern: UUID_PATTERN,
     description: 'UUID. One per SOS, reused on every retry of it.',
   }),
-  'x-attestation': Type.Optional(
-    Type.String({
-      maxLength: 16384,
-      description: 'Fresh per attempt. See docs/attestation-contract.md.',
-    }),
-  ),
 });
 export type SosHeaders = Static<typeof SosHeaders>;
 
@@ -70,7 +59,6 @@ export const SubmissionStatusSchema = Type.Union([
 
 const receiptFields = {
   receiptId: Type.String({ description: '`sos_` + ULID.' }),
-  statusToken: Type.String({ description: 'Send as `X-Status-Token` to the status endpoint.' }),
   reference: Type.String({ description: '`SOS-` + 4 characters.' }),
   status: SubmissionStatusSchema,
   submittedAt: Type.String({ format: 'date-time' }),
@@ -98,12 +86,15 @@ export const SosResponses = {
       'Saved; delivery is being retried (`queued`) after a timeout, network error, 409, 429 or 5xx from Core. Also a replay of an SOS still queued.',
   }),
   400: errorResponse('Headers or body not valid. Do not retry.'),
-  401: errorResponse('Device token missing, invalid or expired. Re-register, then retry with the same key.'),
+  401: errorResponse(
+    'The access token is missing or not valid (`invalid_token`), has expired (`token_expired`: refresh, then retry ' +
+      'with the same key), or its session has ended (`session_revoked`: sign in again).',
+  ),
   403: errorResponse('Not allowed. No reason is given.'),
   404: errorResponse('Unknown intake.'),
   409: Type.Object(
     { error: ErrorObject, ...receiptFields },
-    { description: 'An SOS from this device is already open; its receipt and status token are returned.' },
+    { description: 'An SOS from this account is already open; its receipt is returned.' },
   ),
   410: errorResponse('Intake disabled.'),
   429: errorResponse('Rate limited. `Retry-After` matches `retryAfterSeconds`.'),

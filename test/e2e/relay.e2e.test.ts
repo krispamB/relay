@@ -1,6 +1,7 @@
 /**
  * End-to-end: the real public app, the real Core client against the in-repo mock Core, the real
- * Postgres and the real delivery worker pass. Only attestation (accept-all) and the clock are fake.
+ * Postgres and the real delivery worker pass. The caller signs up through the real auth route; only
+ * the clock is fake.
  *
  * The status poller is built elsewhere; dispatched/closed transitions are deliberately not tested here.
  */
@@ -79,20 +80,24 @@ afterEach(async () => {
 const ctxOf = (): TestContext => h!.ctx;
 const appOf = (): PublicApp => h!.app;
 
-async function registerDevice(): Promise<string> {
-  const nonceRes = await appOf().inject({ method: 'GET', url: '/v1/devices/nonce' });
-  expect(nonceRes.statusCode).toBe(200);
-  const { nonce } = nonceRes.json() as { nonce: string };
-  const reg = await appOf().inject({
+let userSeq = 0;
+
+/** Signs a new user up through the real route and returns their access token. */
+async function signUp(): Promise<string> {
+  userSeq += 1;
+  const res = await appOf().inject({
     method: 'POST',
-    url: '/v1/devices/register',
-    headers: { 'content-type': 'application/json' },
-    payload: JSON.stringify({ platform: 'android', nonce }),
+    url: '/v1/auth/signup',
+    headers: { 'content-type': 'application/json', 'idempotency-key': randomUUID() },
+    payload: JSON.stringify({
+      fullName: `Caller ${userSeq}`,
+      phone: `+23480312345${String(10 + (userSeq % 90)).padStart(2, '0')}`,
+      password: 'correct horse battery staple',
+      device: { platform: 'android', appVersion: '0.3.0', installId: randomUUID() },
+    }),
   });
-  expect(reg.statusCode).toBe(201);
-  const body = reg.json() as { deviceId: string; deviceToken: string };
-  expect(body.deviceId).toMatch(/^dev_/);
-  return body.deviceToken;
+  expect(res.statusCode).toBe(201);
+  return (res.json() as { session: { accessToken: string } }).session.accessToken;
 }
 
 async function getIntake(code = TEST_INTAKE_CODE) {
@@ -100,11 +105,11 @@ async function getIntake(code = TEST_INTAKE_CODE) {
   return { status: res.statusCode, body: res.json() as Json };
 }
 
-async function getStatus(receiptId: string, statusToken: string) {
+async function getStatus(receiptId: string, accessToken: string) {
   const res = await appOf().inject({
     method: 'GET',
     url: `/v1/sos/${receiptId}/status`,
-    headers: { 'x-status-token': statusToken },
+    headers: { authorization: `Bearer ${accessToken}` },
   });
   return { status: res.statusCode, body: res.json() as Json };
 }
@@ -141,13 +146,12 @@ async function adminPost(path: string) {
 // ---------------------------------------------------------------------------------------------
 
 describe('happy path', () => {
-  it('registers, reads the intake, sends an SOS and polls its status', async () => {
-    const token = await registerDevice();
+  it('signs up, reads the intake, sends an SOS and polls its status', async () => {
+    const token = await signUp();
 
     const intake = await getIntake();
     expect(intake.status).toBe(200);
     expect(intake.body.available).toBe(true);
-    expect(intake.body.natures.map((n: { id: string }) => n.id)).toContain('fire');
 
     const res = await sender(token)();
     expect(res.status).toBe(201);
@@ -163,8 +167,10 @@ describe('happy path', () => {
     expect(call.Priority).toBe(3);
     expect(call.ExternalId).toBe(res.body.receiptId);
     expect(call.ReferenceId).toBe(res.body.reference);
+    expect(call.Name).toBe('[PUBLIC SOS] SOS');
+    expect(call.ContactName).toBe(`Caller ${userSeq}`);
 
-    const status = await getStatus(res.body.receiptId, res.body.statusToken);
+    const status = await getStatus(res.body.receiptId, token);
     expect(status.status).toBe(200);
     expect(status.body.status).toBe('received');
     expect(status.body.reference).toBe(res.body.reference);
@@ -175,15 +181,14 @@ describe('happy path', () => {
 });
 
 describe('idempotent retry', () => {
-  it('returns the same receipt and token and creates no second call', async () => {
-    const token = await registerDevice();
+  it('returns the same receipt and creates no second call', async () => {
+    const token = await signUp();
     const send = sender(token);
     const first = await send();
     const second = await send();
     expect(first.status).toBe(201);
     expect(second.status).toBe(201);
     expect(second.body.receiptId).toBe(first.body.receiptId);
-    expect(second.body.statusToken).toBe(first.body.statusToken);
     expect(mock.control.calls()).toHaveLength(1);
     expect(saveCalls()).toHaveLength(1);
   });
@@ -191,7 +196,7 @@ describe('idempotent retry', () => {
 
 describe('Core outage', () => {
   it('answers 202, then delivers once Core is back and the backoff has passed', async () => {
-    const token = await registerDevice();
+    const token = await signUp();
     mock.control.injectFault('Calls/SaveCall', { status: 503 }, 3);
 
     const res = await sender(token)();
@@ -208,14 +213,14 @@ describe('Core outage', () => {
     expect(mock.control.calls()).toHaveLength(1);
     expect(mock.control.calls()[0]!.ExternalId).toBe(res.body.receiptId);
 
-    const status = await getStatus(res.body.receiptId, res.body.statusToken);
+    const status = await getStatus(res.body.receiptId, token);
     expect(status.body.status).toBe('received');
   });
 });
 
 describe('saved but the response was lost', () => {
   it('retries with the same Idempotency-Key and Core still holds exactly one call', async () => {
-    const token = await registerDevice();
+    const token = await signUp();
     mock.control.injectFault('Calls/SaveCall', { drop: true, afterProcessing: true }, 1);
 
     const res = await sender(token)();
@@ -232,15 +237,15 @@ describe('saved but the response was lost', () => {
 
     // The guarantee, asserted on Core's own records.
     expect(mock.control.calls()).toHaveLength(1);
-    const status = await getStatus(res.body.receiptId, res.body.statusToken);
+    const status = await getStatus(res.body.receiptId, token);
     expect(status.body.status).toBe('received');
   });
 });
 
 describe('Core refuses the API key (401)', () => {
   it('answers 503, marks that SOS failed for good, refuses new SOS, and resumes through the admin API', async () => {
-    const tokenA = await registerDevice();
-    const tokenB = await registerDevice();
+    const tokenA = await signUp();
+    const tokenB = await signUp();
     mock.control.setApiKey(`rgk_AbCdEfGh_${'x'.repeat(43)}`);
 
     const sendA = sender(tokenA);
@@ -259,10 +264,10 @@ describe('Core refuses the API key (401)', () => {
     const replay = await sendA();
     expect(replay.status).toBe(201);
     expect(replay.body.status).toBe('failed');
-    expect((await getStatus(replay.body.receiptId, replay.body.statusToken)).body.status).toBe('failed');
+    expect((await getStatus(replay.body.receiptId, tokenA)).body.status).toBe('failed');
 
-    // The refused SOS does not hold the device's one open SOS: a new one is refused for the pause,
-    // not with a 409 pointing at it. A second device is refused too, and the intake says so.
+    // The refused SOS does not hold the user's one open SOS: a new one is refused for the pause,
+    // not with a 409 pointing at it. A second user is refused too, and the intake says so.
     const againA = await postSos(appOf(), { token: tokenA, body: sosBody(ctxOf()) });
     expect(againA.status).toBe(503);
     const second = await postSos(appOf(), { token: tokenB, body: sosBody(ctxOf()) });
@@ -288,7 +293,7 @@ describe('Core refuses the API key (401)', () => {
     await passAfter(10);
     await passAfter(60);
     expect(mock.control.calls()).toHaveLength(0);
-    expect((await getStatus(replay.body.receiptId, replay.body.statusToken)).body.status).toBe('failed');
+    expect((await getStatus(replay.body.receiptId, tokenA)).body.status).toBe('failed');
 
     // The caller's next SOS goes through.
     const fresh = await postSos(appOf(), { token: tokenA, body: sosBody(ctxOf()) });
@@ -299,8 +304,8 @@ describe('Core refuses the API key (401)', () => {
   });
 
   it('an SOS already answered 202 queued before the pause stays queued and is delivered after resume', async () => {
-    const tokenA = await registerDevice();
-    const tokenB = await registerDevice();
+    const tokenA = await signUp();
+    const tokenB = await signUp();
 
     // A: Core is down, so A is answered 202 and left to the worker.
     mock.control.injectFault('Calls/SaveCall', { status: 503 }, 1);
@@ -315,19 +320,19 @@ describe('Core refuses the API key (401)', () => {
 
     // A waits while paused.
     await passAfter(60);
-    expect((await getStatus(a.body.receiptId, a.body.statusToken)).body.status).toBe('queued');
+    expect((await getStatus(a.body.receiptId, tokenA)).body.status).toBe('queued');
 
     mock.control.setApiKey(DEFAULT_API_KEY);
     expect((await adminPost('/admin/v1/delivery/resume')).status).toBe(200);
     await passAfter(10);
-    expect((await getStatus(a.body.receiptId, a.body.statusToken)).body.status).toBe('received');
+    expect((await getStatus(a.body.receiptId, tokenA)).body.status).toBe('received');
     expect(mock.control.calls().map((c) => c.ExternalId)).toEqual([a.body.receiptId]);
   });
 });
 
 describe('Core field-policy rejection', () => {
   it('answers 201 failed, raises a high alert and never retries', async () => {
-    const token = await registerDevice();
+    const token = await signUp();
     mock.control.setFieldPolicy([{ Key: 'what3words', Required: true }]);
 
     const res = await sender(token)();
@@ -345,21 +350,20 @@ describe('Core field-policy rejection', () => {
     expect(saveCalls()).toHaveLength(1);
     expect(mock.control.calls()).toHaveLength(0);
 
-    const status = await getStatus(res.body.receiptId, res.body.statusToken);
+    const status = await getStatus(res.body.receiptId, token);
     expect(status.body.status).toBe('failed');
   });
 });
 
-describe('one open SOS per device', () => {
+describe('one open SOS per user', () => {
   it('answers 409 carrying the open receipt', async () => {
-    const token = await registerDevice();
+    const token = await signUp();
     const first = await sender(token)();
     expect(first.status).toBe(201);
 
-    const second = await postSos(appOf(), { token, body: sosBody(ctxOf(), { nature: 'medical' }) });
+    const second = await postSos(appOf(), { token, body: sosBody(ctxOf(), { address: 'Somewhere else' }) });
     expect(second.status).toBe(409);
     expect(second.body.receiptId).toBe(first.body.receiptId);
-    expect(second.body.statusToken).toBe(first.body.statusToken);
     expect(second.body.reference).toBe(first.body.reference);
     expect(second.body.status).toBe('received');
     expect(mock.control.calls()).toHaveLength(1);
@@ -368,13 +372,13 @@ describe('one open SOS per device', () => {
 
 describe('demo intake', () => {
   it('answers 201 received and never sends a SaveCall request', async () => {
-    const token = await registerDevice();
+    const token = await signUp();
     const intake = await getIntake(DEMO_INTAKE_CODE);
     expect(intake.body.demo).toBe(true);
 
     const res = await postSos(appOf(), {
       token,
-      body: sosBody(ctxOf(), { intakeCode: DEMO_INTAKE_CODE, nature: 'medical' }),
+      body: sosBody(ctxOf(), { intakeCode: DEMO_INTAKE_CODE }),
     });
     expect(res.status).toBe(201);
     expect(res.body.status).toBe('received');

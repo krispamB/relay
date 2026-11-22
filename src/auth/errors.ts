@@ -5,13 +5,7 @@
  */
 
 /** Field error codes of contract §4.1, used in `fields[].code`. */
-export type FieldErrorCode =
-  | 'required'
-  | 'too_short'
-  | 'too_long'
-  | 'invalid_phone'
-  | 'invalid_email'
-  | 'invalid_value';
+export type FieldErrorCode = 'required' | 'too_short' | 'too_long' | 'invalid_phone' | 'invalid_value';
 
 export interface FieldError {
   /** The request field name, `device.platform` for a nested one. */
@@ -26,7 +20,6 @@ export type AuthErrorCode =
   | 'rate_limited'
   | 'internal_error'
   | 'unavailable'
-  | 'email_taken'
   | 'phone_taken'
   | 'idempotency_key_reused'
   | 'invalid_refresh_token'
@@ -83,7 +76,6 @@ export const authErrors = {
       'This service is not available right now.',
       retryAfterSeconds === undefined ? undefined : atLeastOneSecond(retryAfterSeconds),
     ),
-  emailTaken: () => new AuthError(409, 'email_taken', 'An account with this email already exists.'),
   phoneTaken: () => new AuthError(409, 'phone_taken', 'This phone number is already registered.'),
   idempotencyKeyReused: () =>
     new AuthError(422, 'idempotency_key_reused', 'This Idempotency-Key was used with a different body.'),
@@ -91,7 +83,7 @@ export const authErrors = {
   sessionRevoked: () => new AuthError(401, 'session_revoked', 'This session has ended.'),
   tokenExpired: () => new AuthError(401, 'token_expired', 'The access token has expired.'),
   invalidToken: () => new AuthError(401, 'invalid_token', 'The access token is not valid.'),
-  /** The same answer whether the email is unknown or the password is wrong (contract §6). */
+  /** The same answer whether the phone number is unknown or the password is wrong (contract §6). */
   invalidCredentials: () =>
-    new AuthError(401, 'invalid_credentials', 'The email or password is not correct.'),
+    new AuthError(401, 'invalid_credentials', 'The phone number or password is not correct.'),
 };

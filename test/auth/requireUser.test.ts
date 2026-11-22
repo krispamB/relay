@@ -34,7 +34,6 @@ async function insertUser(id: string) {
       id,
       full_name: 'Ada Okafor',
       phone: `+2348${String(seq).padStart(9, '0')}`,
-      email: `${id}@example.com`,
       password_hash: '$argon2id$stub',
       created_at: now,
       updated_at: now,
@@ -66,6 +65,7 @@ describe('requireUser / authenticate', () => {
       userId: 'user-1',
       familyId,
       jti: row.id,
+      expiresAt: new Date(session.accessTokenExpiresAt),
     });
   });
 

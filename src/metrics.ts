@@ -13,8 +13,6 @@ export const METRICS = {
   submissions: 'sos_submissions_total',
   /** counter {endpoint, result: ok|auth|conflict|rejected|retryable} */
   coreCalls: 'sos_core_calls_total',
-  /** counter {platform, phase: register|request, result: ok|failed|missing} */
-  attestations: 'sos_attestations_total',
   /** counter {rule} */
   rateLimited: 'sos_rate_limited_total',
   /** histogram {endpoint} */
@@ -35,6 +33,12 @@ export const METRICS = {
   authSignouts: 'auth_signouts_total',
   /** counter {result: success|invalid_credentials|rate_limited} */
   authSignins: 'auth_signins_total',
+  /** counter {result: accepted|replay|recording_limit|sos_closed|key_reused} */
+  recordingUploads: 'recordings_uploaded_total',
+  /** counter */
+  recordingsAttached: 'recordings_attached_total',
+  /** counter {reason: call_closed|sos_closed|sos_failed|attempts_exhausted|core_rejected|window_ended|no_bytes} */
+  recordingsDropped: 'recordings_dropped_total',
 } as const;
 
 export type MetricName = (typeof METRICS)[keyof typeof METRICS];

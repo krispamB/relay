@@ -85,7 +85,7 @@ beforeEach(async () => {
     log,
     config: {
       ...base,
-      auth: { enabled: true, tokenSecret: 'auth-token-secret-for-tests-0123456789ab' },
+      auth: { tokenSecret: 'auth-token-secret-for-tests-0123456789ab' },
       // Above anything one walk sends, so a 429 here could only be an auth limit.
       limits: { ...base.limits, requestsPerIpPerMinute: 10_000 },
     },
@@ -129,12 +129,11 @@ async function call(
   return { status: res.statusCode, body };
 }
 
-/** A sign-up body for the n-th user: distinct email, phone and name. */
+/** A sign-up body for the n-th user: distinct phone and name. */
 function signupBody(n: number, overrides: Record<string, unknown> = {}): Json {
   return {
     fullName: `Ada Okafor ${n}`,
     phone: `+23480312345${String(60 + n).padStart(2, '0')}`,
-    email: `ada${n}@example.com`,
     password: PASSWORD,
     device: { platform: 'android', appVersion: '0.3.0', installId: INSTALL_ID },
     ...overrides,
@@ -157,25 +156,14 @@ const me = (accessToken: string) => call('GET', '/v1/me', { headers: bearer(acce
 const refresh = (refreshToken: string) => call('POST', '/v1/auth/refresh', { body: { refreshToken } });
 const signout = (accessToken: string, refreshToken: string) =>
   call('POST', '/v1/auth/signout', { headers: bearer(accessToken), body: { refreshToken } });
-const signin = (email: string, password: string) =>
+const signin = (phone: string, password: string) =>
   call('POST', '/v1/auth/signin', {
     body: {
-      email,
+      phone,
       password,
       device: { platform: 'android', appVersion: '0.3.0', installId: INSTALL_ID },
     },
   });
-
-async function registerDevice(): Promise<string> {
-  const nonce = await call('GET', '/v1/devices/nonce');
-  expect(nonce.status).toBe(200);
-  const reg = await call('POST', '/v1/devices/register', {
-    body: { platform: 'android', nonce: nonce.body.nonce },
-  });
-  expect(reg.status).toBe(201);
-  remember('deviceToken', reg.body.deviceToken);
-  return reg.body.deviceToken as string;
-}
 
 // ---------------------------------------------------------------------------------------------
 
@@ -189,7 +177,6 @@ describe('docs/auth-contract.md §7: acceptance checklist', () => {
       id: expect.stringMatching(/^[0-9a-f-]{36}$/),
       fullName: 'Ada Okafor 1',
       phone: body.phone,
-      email: 'ada1@example.com',
       phoneVerified: false,
       createdAt: '2026-11-18T12:00:00Z',
     });
@@ -210,7 +197,6 @@ describe('docs/auth-contract.md §7: acceptance checklist', () => {
       signupBody(1, {
         fullName: '   ',
         phone: '0803',
-        email: 'not-an-email',
         password: 'short',
         device: { platform: 'windows', appVersion: 'v'.repeat(33), installId: 'nope' },
       }),
@@ -221,7 +207,6 @@ describe('docs/auth-contract.md §7: acceptance checklist', () => {
     expect(res.body.error.fields).toEqual([
       { field: 'fullName', code: 'too_short' },
       { field: 'phone', code: 'invalid_phone' },
-      { field: 'email', code: 'invalid_email' },
       { field: 'password', code: 'too_short' },
       { field: 'device.platform', code: 'invalid_value' },
       { field: 'device.appVersion', code: 'too_long' },
@@ -231,18 +216,11 @@ describe('docs/auth-contract.md §7: acceptance checklist', () => {
     expect(users).toHaveLength(0);
   });
 
-  it('A duplicate email returns 409 `email_taken`, including when it differs only in case (`ADA@example.com`).', async () => {
-    await newUser({ email: 'ada@example.com' });
-
-    const same = await signup(signupBody(2, { email: 'ada@example.com' }));
-    const upper = await signup(signupBody(3, { email: 'ADA@example.com' }));
-
-    expect(same.status).toBe(409);
-    expect(same.body.error.code).toBe('email_taken');
-    expect(upper.status).toBe(409);
-    expect(upper.body.error.code).toBe('email_taken');
-    const users = await ctx.db.selectFrom('users').select('email').execute();
-    expect(users.map((u) => u.email)).toEqual(['ada@example.com']);
+  it('A sign-up with an `email` field returns 400 `validation_failed`: email is no longer part of an account.', async () => {
+    const res = await signup(signupBody(1, { email: 'ada@example.com' }));
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('validation_failed');
+    expect(res.body.error.fields).toEqual([{ field: 'email', code: 'invalid_value' }]);
   });
 
   it('A duplicate phone number returns 409 `phone_taken`.', async () => {
@@ -369,7 +347,7 @@ describe('docs/auth-contract.md §7: acceptance checklist', () => {
     expect(ended.status).toBe(204);
     expect((await refresh(created.session.refreshToken)).body.error.code).toBe('session_revoked');
 
-    const again = await signin(created.user.email, PASSWORD);
+    const again = await signin(created.user.phone, PASSWORD);
 
     expect(again.status).toBe(200);
     expect(again.body.user).toEqual(created.user);
@@ -378,10 +356,10 @@ describe('docs/auth-contract.md §7: acceptance checklist', () => {
     expect((await me(created.session.accessToken)).body.error.code).toBe('session_revoked');
   });
 
-  it('sign-in answers the same for an unknown email and a wrong password', async () => {
+  it('sign-in answers the same for an unknown phone and a wrong password', async () => {
     const created = await newUser();
-    const unknown = await signin('nobody@example.com', PASSWORD);
-    const wrong = await signin(created.user.email, 'not the password');
+    const unknown = await signin('+2348099999999', PASSWORD);
+    const wrong = await signin(created.user.phone, 'not the password');
 
     expect(unknown.status).toBe(401);
     expect(wrong.status).toBe(401);
@@ -389,24 +367,16 @@ describe('docs/auth-contract.md §7: acceptance checklist', () => {
     expect(unknown.body.error.code).toBe('invalid_credentials');
   });
 
-  it('A `GET /v1/me` with a relay device token answers 401 `invalid_token`, and a `POST /v1/sos` with an access token answers 401 `unauthorized`: the two kinds of token are never accepted for each other.', async () => {
-    const deviceToken = await registerDevice();
+  it('The access token is the SOS token: `POST /v1/sos` with it is accepted, and without it is 401 `invalid_token`.', async () => {
     const { session } = await newUser();
 
-    const meWithDevice = await me(deviceToken);
-    expect(meWithDevice.status).toBe(401);
-    expect(meWithDevice.body.error.code).toBe('invalid_token');
+    const without = await postSos(app, { body: sosBody(ctx) });
+    expect(without.status).toBe(401);
+    expect(without.body.error.code).toBe('invalid_token');
 
-    const sosWithAccess = await postSos(app, { token: session.accessToken, body: sosBody(ctx) });
-    expect(sosWithAccess.status).toBe(401);
-    expect(sosWithAccess.body.error.code).toBe('unauthorized');
-    remember('phone', sosBody(ctx).phone);
-    remember('name', sosBody(ctx).name);
-
-    // Each token still works where it belongs.
+    const sos = await postSos(app, { token: session.accessToken, body: sosBody(ctx) });
+    expect([201, 202]).toContain(sos.status);
     expect((await me(session.accessToken)).status).toBe(200);
-    const sosWithDevice = await postSos(app, { token: deviceToken, body: sosBody(ctx) });
-    expect([201, 202]).toContain(sosWithDevice.status);
   });
 
   // Runs after every other walk in this file, so the capture spans all of them (see the file comment).
@@ -417,9 +387,8 @@ describe('docs/auth-contract.md §7: acceptance checklist', () => {
     const created = await signup(body, key);
     expect(created.status).toBe(201);
     await signup(body, key);
-    await signup(signupBody(2, { email: body.email }));
     await signup(signupBody(3, { phone: body.phone }));
-    await signup(signupBody(4, { email: 'bad', password: 'short' }));
+    await signup(signupBody(4, { phone: 'bad', password: 'short' }));
     const { session, user } = created.body;
     await me(session.accessToken);
     const rotated = (await refresh(session.refreshToken)).body.session;

@@ -508,3 +508,267 @@ describe('reads', () => {
     expect(await client.getPendingCalls()).toMatchObject({ kind: 'retryable' });
   });
 });
+
+describe('saveCallFile (CallFiles/SaveCallFile)', () => {
+  const audio = Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0xff, 0xfe, 0x01, 0x80]);
+  const file = { callId: '48213', name: 'SOS-7KQ2-1.m4a', data: audio, idempotencyKey: 'rec_01JDTESTKEY' };
+
+  it('posts { CallId, UserId, Type: 1, Name, Data } with Data base64, and returns the attachment id', async () => {
+    handler = (_r, res) => reply(res, 201, envelope({ Status: 'created', Id: '9001' }));
+    const r = await client.saveCallFile(file);
+    expect(r).toEqual({ kind: 'ok', requestId: 'req-123', data: { fileId: '9001' } });
+
+    const s = seen[0]!;
+    expect(s.method).toBe('POST');
+    expect(s.url).toBe('/api/v4/CallFiles/SaveCallFile');
+    expect(s.headers['x-resgrid-apikey']).toBe(API_KEY);
+    expect(s.headers.authorization).toBeUndefined();
+    expect(s.headers['content-type']).toBe('application/json');
+    // A live Core honours Idempotency-Key on SaveCallFile (live checklist, 2026-11-22): a retry after a
+    // lost 201 returns the same file instead of attaching the audio twice.
+    expect(s.headers['idempotency-key']).toBe('rec_01JDTESTKEY');
+    const sent = JSON.parse(s.body) as Record<string, unknown>;
+    expect(Object.keys(sent).sort()).toEqual(['CallId', 'Data', 'Name', 'Type', 'UserId']);
+    expect(sent.CallId).toBe('48213');
+    expect(sent.Type).toBe(1);
+    expect(sent.Name).toBe('SOS-7KQ2-1.m4a');
+    expect(typeof sent.UserId).toBe('string');
+    expect((sent.UserId as string).length).toBeGreaterThan(0);
+    // Independent of the client's own encoder: these are the known base64 of the twelve bytes.
+    expect(sent.Data).toBe('AAAAGGZ0eXD//gGA');
+  });
+
+  it('accepts a numeric Id in the 201 body', async () => {
+    handler = (_r, res) => reply(res, 201, envelope({ Status: 'created', Id: 77 }));
+    expect(await client.saveCallFile(file)).toMatchObject({ kind: 'ok', data: { fileId: '77' } });
+  });
+
+  // What a live Core answers for a call that does not exist (live checklist, 2026-11-22): HTTP 200,
+  // Status "not_found", Id null. The call can never take the file, so this is call_closed, not a retry.
+  it('200 with Status not_found and Id null → call_closed', async () => {
+    handler = (_r, res) => reply(res, 200, envelope({ Status: 'not_found', Id: null }));
+    expect(await client.saveCallFile(file)).toEqual({ kind: 'call_closed' });
+    expect(metrics.incs).toContainEqual({
+      name: METRICS.coreCalls,
+      labels: { endpoint: 'SaveCallFile', result: 'call_closed' },
+    });
+  });
+
+  it('201 without an Id → retryable', async () => {
+    handler = (_r, res) => reply(res, 201, envelope({ Status: 'created' }));
+    expect(await client.saveCallFile(file)).toMatchObject({ kind: 'retryable' });
+  });
+
+  // The v4 swagger declares only 200 / 201 and 400 ProblemDetails for SaveCallFile; Core answers a call
+  // that is not active or pending with that 400.
+  it('HTTP 400 → call_closed', async () => {
+    handler = (_r, res) => reply(res, 400, '{"title":"Bad Request","status":400}');
+    expect(await client.saveCallFile(file)).toEqual({ kind: 'call_closed' });
+    expect(metrics.incs).toContainEqual({
+      name: METRICS.coreCalls,
+      labels: { endpoint: 'SaveCallFile', result: 'call_closed' },
+    });
+  });
+  it.each([404, 410])('HTTP %i is not declared by Core → rejected, not call_closed', async (status) => {
+    handler = (_r, res) => reply(res, status);
+    expect(await client.saveCallFile(file)).toMatchObject({ kind: 'rejected', httpStatus: status });
+  });
+  it('401 / 403 → auth, 409 → conflict, 413 → rejected', async () => {
+    handler = (_r, res) => reply(res, 401);
+    expect(await client.saveCallFile(file)).toEqual({ kind: 'auth', httpStatus: 401 });
+    handler = (_r, res) => reply(res, 403);
+    expect(await client.saveCallFile(file)).toEqual({ kind: 'auth', httpStatus: 403 });
+    handler = (_r, res) => reply(res, 409);
+    expect(await client.saveCallFile(file)).toEqual({ kind: 'conflict' });
+    handler = (_r, res) => reply(res, 413, 'too big');
+    expect(await client.saveCallFile(file)).toEqual({
+      kind: 'rejected',
+      httpStatus: 413,
+      message: 'too big',
+    });
+  });
+  it('429 carries Retry-After; 5xx, a dropped connection and bad JSON are retryable', async () => {
+    handler = (_r, res) => reply(res, 429, undefined, { 'retry-after': '7' });
+    expect(await client.saveCallFile(file)).toEqual({
+      kind: 'retryable',
+      reason: 'HTTP 429',
+      retryAfterSeconds: 7,
+    });
+    handler = (_r, res) => reply(res, 503);
+    expect(await client.saveCallFile(file)).toMatchObject({ kind: 'retryable' });
+    handler = (_r, res) => res.socket?.destroy();
+    expect(await client.saveCallFile(file)).toMatchObject({ kind: 'retryable' });
+    handler = (_r, res) => reply(res, 201, 'not json');
+    expect(await client.saveCallFile(file)).toMatchObject({ kind: 'retryable' });
+  });
+  it('honours opts.timeoutMs', async () => {
+    handler = () => {};
+    expect(await client.saveCallFile(file, { timeoutMs: 100 })).toEqual({
+      kind: 'retryable',
+      reason: 'timeout',
+    });
+  });
+  it('never logs the file bytes, in any outcome', async () => {
+    handler = (_r, res) => reply(res, 201, envelope({ Status: 'created', Id: '9001' }));
+    await client.saveCallFile(file);
+    handler = (_r, res) => reply(res, 400);
+    await client.saveCallFile(file);
+    handler = (_r, res) => reply(res, 503);
+    await client.saveCallFile(file);
+    const logs = logLines.join('');
+    expect(logs).toContain('SaveCallFile');
+    expect(logs).not.toContain('AAAAGGZ0eXD//gGA');
+    expect(logs).not.toContain('"Data"');
+  });
+});
+
+describe('getAllUnitStatuses (UnitStatus/GetAllUnitStatuses)', () => {
+  it('maps Core fields to CoreUnitStatus', async () => {
+    handler = (_r, res) =>
+      reply(
+        res,
+        200,
+        envelope({
+          Status: 'success',
+          Data: [
+            {
+              UnitId: 214,
+              Name: 'Engine 1',
+              Type: 'Engine',
+              State: 'En Route',
+              DestinationType: 2,
+              DestinationId: 48213,
+              Latitude: 6.5244,
+              Longitude: 3.3792,
+              Timestamp: '2026-11-22T11:15:30',
+              TimestampUtc: '2026-11-22T10:15:30Z',
+            },
+          ],
+        }),
+      );
+    const r = await client.getAllUnitStatuses();
+    expect(r).toEqual({
+      kind: 'ok',
+      requestId: 'req-123',
+      data: {
+        units: [
+          {
+            unitId: '214',
+            unitType: 'Engine',
+            statusText: 'En Route',
+            destinationType: 2,
+            destinationId: '48213',
+            latitude: 6.5244,
+            longitude: 3.3792,
+            timestamp: '2026-11-22T10:15:30.000Z',
+          },
+        ],
+      },
+    });
+    expect(seen[0]!.method).toBe('GET');
+    expect(seen[0]!.url).toBe('/api/v4/UnitStatus/GetAllUnitStatuses');
+    expect(seen[0]!.headers['x-resgrid-apikey']).toBe(API_KEY);
+  });
+
+  it('tolerates numbers as strings, nulls, blanks and missing fields', async () => {
+    handler = (_r, res) =>
+      reply(
+        res,
+        200,
+        envelope({
+          Status: 'success',
+          Data: [
+            {
+              UnitId: '9',
+              Type: null,
+              State: '',
+              DestinationType: '2',
+              DestinationId: '48213',
+              Latitude: '6.5',
+              Longitude: ' 3.25 ',
+              TimestampUtc: '2026-11-22T10:15:30+01:00',
+            },
+            { UnitId: 10, DestinationType: null, DestinationId: null, Latitude: null, Longitude: 'abc' },
+            { UnitId: 11, DestinationType: 0, DestinationId: '', TimestampUtc: 'not a date' },
+          ],
+        }),
+      );
+    const r = await client.getAllUnitStatuses();
+    expect(r.kind === 'ok' && r.data.units).toEqual([
+      {
+        unitId: '9',
+        unitType: null,
+        statusText: null,
+        destinationType: 2,
+        destinationId: '48213',
+        latitude: 6.5,
+        longitude: 3.25,
+        timestamp: '2026-11-22T09:15:30.000Z',
+      },
+      {
+        unitId: '10',
+        unitType: null,
+        statusText: null,
+        destinationType: null,
+        destinationId: null,
+        latitude: null,
+        longitude: null,
+        timestamp: null,
+      },
+      {
+        unitId: '11',
+        unitType: null,
+        statusText: null,
+        destinationType: 0,
+        destinationId: null,
+        latitude: null,
+        longitude: null,
+        timestamp: null,
+      },
+    ]);
+  });
+
+  it('reads TimestampUtc (never the department-local Timestamp), without a zone as UTC', async () => {
+    handler = (_r, res) =>
+      reply(
+        res,
+        200,
+        envelope({
+          Status: 'success',
+          Data: [{ UnitId: 1, Timestamp: '2026-11-22T11:15:30', TimestampUtc: '2026-11-22T10:15:30' }],
+        }),
+      );
+    const r = await client.getAllUnitStatuses();
+    expect(r.kind === 'ok' && r.data.units[0]?.timestamp).toBe('2026-11-22T10:15:30.000Z');
+  });
+
+  it('skips rows with no UnitId or that are not objects', async () => {
+    handler = (_r, res) =>
+      reply(
+        res,
+        200,
+        envelope({ Status: 'success', Data: [null, 'x', { Type: 'Engine' }, { UnitId: '' }, { UnitId: 5 }] }),
+      );
+    const r = await client.getAllUnitStatuses();
+    expect(r.kind === 'ok' && r.data.units.map((u) => u.unitId)).toEqual(['5']);
+  });
+
+  it('not_found (HTTP 200, empty list) → no units', async () => {
+    handler = (_r, res) => reply(res, 200, envelope({ Status: 'not_found', Data: [] }));
+    expect(await client.getAllUnitStatuses()).toMatchObject({ kind: 'ok', data: { units: [] } });
+    handler = (_r, res) => reply(res, 200, envelope({ Status: 'not_found', Data: null }));
+    expect(await client.getAllUnitStatuses()).toMatchObject({ kind: 'ok', data: { units: [] } });
+  });
+
+  it('success with Data that is not an array → retryable', async () => {
+    handler = (_r, res) => reply(res, 200, envelope({ Status: 'success', Data: { UnitId: 1 } }));
+    expect(await client.getAllUnitStatuses()).toMatchObject({ kind: 'retryable' });
+  });
+
+  it('401 / 403 → auth; 503 → retryable', async () => {
+    handler = (_r, res) => reply(res, 403);
+    expect(await client.getAllUnitStatuses()).toEqual({ kind: 'auth', httpStatus: 403 });
+    handler = (_r, res) => reply(res, 503);
+    expect(await client.getAllUnitStatuses()).toMatchObject({ kind: 'retryable' });
+  });
+});

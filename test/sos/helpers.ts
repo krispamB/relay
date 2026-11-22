@@ -2,25 +2,23 @@ import { randomUUID } from 'node:crypto';
 import { Writable } from 'node:stream';
 import { pino } from 'pino';
 import { buildPublicApp, type PublicApp } from '../../src/app.js';
-import type { AttestationService, RequestInput, RequestOutcome } from '../../src/attestation/types.js';
 import type { Config, Limits } from '../../src/config.js';
 import type { CoreClient } from '../../src/core/types.js';
-import type { Platform } from '../../src/db/types.js';
 import type { Labels, MetricName, Metrics } from '../../src/metrics.js';
 import type { SaveResult } from '../delivery/fixtures.js';
 import {
-  acceptAllAttestation,
   createTestContext,
   markHealthy,
   TEST_INTAKE_CODE,
   type TestContext,
   testConfig,
 } from '../helpers/context.js';
-import { seedDevice } from '../helpers/seed.js';
+import { seedUser } from '../helpers/seed.js';
 
+/** A valid phone number for tests that need one fixed number; `caller(h)` draws a unique one. */
 export const PHONE = '+2348012345678';
+/** The full name `caller(h)` gives its user unless told otherwise. */
 export const NAME = 'Adaeze Okonkwo-Bello';
-export const DETAILS = 'Smoke pouring from the generator shed beside the blue gate';
 export const ADDRESS = '12 Marina Road, opposite Kingsway pharmacy';
 export const LAT = 6.524417;
 export const LON = 3.379206;
@@ -59,24 +57,6 @@ export function capturingLogger() {
   return { log: pino({ level: 'trace' }, stream), lines };
 }
 
-/** An attestation service driven by a function, recording every request input. */
-export function fakeAttestation(
-  verify: (input: RequestInput) => RequestOutcome | Promise<RequestOutcome> = () => ({
-    accepted: true,
-    attested: true,
-  }),
-): AttestationService & { requests: RequestInput[] } {
-  const requests: RequestInput[] = [];
-  return {
-    requests,
-    verifyRegistration: acceptAllAttestation.verifyRegistration,
-    async verifyRequest(input) {
-      requests.push(input);
-      return verify(input);
-    },
-  };
-}
-
 /**
  * A Core whose saveCall takes `delayMs` but, like the real client, gives up at the timeout it is
  * handed and reports a retryable timeout.
@@ -106,6 +86,12 @@ export function slowCore(delayMs: number, result: SaveResult = { kind: 'ok', dat
     getFieldPolicy: async () => {
       throw new Error('unexpected');
     },
+    saveCallFile: async () => {
+      throw new Error('unexpected');
+    },
+    getAllUnitStatuses: async () => {
+      throw new Error('unexpected');
+    },
   };
   return core;
 }
@@ -119,7 +105,6 @@ export interface Harness {
 export async function harness(
   opts: {
     core?: CoreClient;
-    attestation?: AttestationService;
     limits?: Partial<Limits>;
     config?: Partial<Config>;
     log?: TestContext['log'];
@@ -132,7 +117,6 @@ export async function harness(
     config: { ...base, limits: { ...base.limits, ...opts.limits } },
     metrics,
     ...(opts.core ? { core: opts.core } : {}),
-    ...(opts.attestation ? { attestation: opts.attestation } : {}),
     ...(opts.log ? { log: opts.log } : {}),
   });
   if (opts.healthy !== false) await markHealthy(ctx);
@@ -147,10 +131,6 @@ export function isoAgo(ctx: TestContext, ms: number): string {
 export function sosBody(ctx: TestContext, overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     intakeCode: TEST_INTAKE_CODE,
-    nature: 'fire',
-    phone: PHONE,
-    name: NAME,
-    details: DETAILS,
     location: { lat: LAT, lon: LON, accuracyM: 12, capturedAt: isoAgo(ctx, 8000), source: 'gps' },
     ...overrides,
   };
@@ -183,22 +163,25 @@ export async function postSos(app: PublicApp, opts: PostOpts) {
   return { status: res.statusCode, body: res.json() as Record<string, any>, headers: res.headers };
 }
 
-/** Seeds a device and returns a sender bound to it. */
-export async function device(h: Harness, platform: Platform = 'android') {
-  const seeded = await seedDevice(h.ctx, { platform });
+/**
+ * Seeds a signed-in user and returns a sender bound to them, with a fresh access token per request.
+ * The phone is unique unless `phone` is given (phones are unique per account).
+ */
+export async function caller(h: Harness, opts: { phone?: string; fullName?: string } = {}) {
+  const seeded = await seedUser(h.ctx, { fullName: NAME, ...opts });
   return {
     ...seeded,
     send: (overrides: Record<string, unknown> = {}, opts: Omit<PostOpts, 'token' | 'body'> = {}) =>
-      postSos(h.app, { token: seeded.token, body: sosBody(h.ctx, overrides), ...opts }),
+      postSos(h.app, { token: seeded.token(), body: sosBody(h.ctx, overrides), ...opts }),
   };
 }
 
-/** Marks every open submission of a device closed, so it may send again. */
-export async function closeAll(h: Harness, deviceId: string): Promise<void> {
+/** Marks every open submission of a user closed, so they may send again. */
+export async function closeAll(h: Harness, userId: string): Promise<void> {
   await h.ctx.db
     .updateTable('submissions')
     .set({ status: 'closed', closed_at: h.ctx.clock.now() })
-    .where('device_id', '=', deviceId)
+    .where('user_id', '=', userId)
     .where('status', 'in', ['queued', 'received', 'dispatched'])
     .execute();
 }

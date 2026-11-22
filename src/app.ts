@@ -1,4 +1,5 @@
 import fastifySwagger from '@fastify/swagger';
+import fastifySwaggerUi from '@fastify/swagger-ui';
 import type { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
 import Fastify, {
   type FastifyBaseLogger,
@@ -13,9 +14,11 @@ import { authPlugin } from './auth/plugin.js';
 import { MINUTE } from './clock.js';
 import type { AppContext } from './context.js';
 import { ApiError, errors, safeError } from './errors.js';
+import type { LiveOptions } from './live/socket.js';
 import { METRICS } from './metrics.js';
-import { devicesRoutes } from './routes/devices.js';
 import { intakeRoutes } from './routes/intake.js';
+import { liveRoutes } from './routes/live.js';
+import { recordingRoutes } from './routes/recording.js';
 import { sosRoutes } from './routes/sos.js';
 import { statusRoutes } from './routes/status.js';
 
@@ -26,13 +29,6 @@ export type PublicApp = FastifyInstance<
   FastifyBaseLogger,
   TypeBoxTypeProvider
 >;
-
-declare module 'fastify' {
-  interface FastifyRequest {
-    /** The exact bytes of a JSON request body, for the attestation binding hash (PRD §7.4). */
-    rawBody?: Buffer;
-  }
-}
 
 // biome-ignore lint/suspicious/noExplicitAny: accepts any Fastify instance regardless of type provider
 type AnyApp = FastifyInstance<any, any, any, any, any>;
@@ -70,6 +66,11 @@ export function installErrorHandling(app: AnyApp): void {
         .status(400)
         .send(errors.badRequest('invalid_request', 'The request is not valid.').toBody());
     }
+    if (e.statusCode === 413) {
+      return reply
+        .status(413)
+        .send({ error: { code: 'payload_too_large', message: 'The request body is too large.' } });
+    }
     if (typeof e.statusCode === 'number' && e.statusCode >= 400 && e.statusCode < 500) {
       const status = e.statusCode === 413 || e.statusCode === 415 ? e.statusCode : 400;
       return reply
@@ -83,11 +84,10 @@ export function installErrorHandling(app: AnyApp): void {
   app.setNotFoundHandler((_req, reply) => reply.status(404).send(errors.notFound().toBody()));
 }
 
-/** Keeps the raw bytes of JSON bodies so the attestation binding can hash exactly what was sent. */
+/** Parses JSON bodies; an empty body is no body, and invalid JSON is a 400. */
 export function installRawJsonParser(app: AnyApp): void {
-  app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (req, body, done) => {
+  app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (_req, body, done) => {
     const buf = body as Buffer;
-    req.rawBody = buf;
     if (buf.length === 0) return done(null, undefined);
     try {
       done(null, JSON.parse(buf.toString('utf8')));
@@ -129,7 +129,12 @@ export class WindowLimiter {
   }
 }
 
-export async function buildPublicApp(ctx: AppContext): Promise<PublicApp> {
+export interface PublicAppOptions {
+  /** Live socket timings and limits; tests shorten the timeouts (src/live/socket.ts). */
+  live?: Partial<LiveOptions>;
+}
+
+export async function buildPublicApp(ctx: AppContext, options: PublicAppOptions = {}): Promise<PublicApp> {
   const app = Fastify({
     loggerInstance: ctx.log as FastifyBaseLogger,
     bodyLimit: 16 * 1024,
@@ -148,11 +153,8 @@ export async function buildPublicApp(ctx: AppContext): Promise<PublicApp> {
       info: { title: 'SOS Relay public API', version: '1.0.0' },
       components: {
         securitySchemes: {
-          deviceToken: { type: 'http', scheme: 'bearer' },
-          // The auth endpoints' own bearer token, never accepted in place of a device token.
-          ...(ctx.config.auth.enabled
-            ? { accessToken: { type: 'http' as const, scheme: 'bearer', bearerFormat: 'JWT' } }
-            : {}),
+          // The signed-in user's access token: the SOS routes and the authenticated auth routes.
+          accessToken: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
         },
       },
     },
@@ -178,14 +180,21 @@ export async function buildPublicApp(ctx: AppContext): Promise<PublicApp> {
   });
 
   app.get('/v1/openapi.json', { schema: { hide: true } }, async () => app.swagger());
+  // A browsable view of the same document. Its routes are hidden from it; the per-IP limit applies.
+  await app.register(fastifySwaggerUi, {
+    routePrefix: '/v1/docs',
+    staticCSP: true,
+    uiConfig: { docExpansion: 'list', deepLinking: true },
+  });
 
   await intakeRoutes(app, ctx);
-  await devicesRoutes(app, ctx);
   await sosRoutes(app, ctx);
   await statusRoutes(app, ctx);
+  await recordingRoutes(app, ctx);
+  await liveRoutes(app, ctx, options.live);
 
   // Encapsulated: its own error handler. Registered after the per-IP limiter hook, which it inherits.
-  if (ctx.config.auth.enabled) await app.register(authPlugin, { ctx });
+  await app.register(authPlugin, { ctx });
 
   return app;
 }

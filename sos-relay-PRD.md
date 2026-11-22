@@ -8,7 +8,7 @@
 | **Serves** | The public SOS mobile app (`sos-app-PRD.md`) |
 | **Talks to** | Resgrid Core (Sentinel) v4 REST API (`integration.md`) |
 | **Precedence** | For anything about Core, `integration.md` wins over this document. For the public `/v1` API, this document wins over `sos-app-PRD.md` (see §16). |
-| **App contract** | The app team works from `docs/app-api-contract.md` (every public endpoint, request, response and expected app behaviour) and `docs/openapi.json`. Both are derived from this document and the code. |
+| **App contract** | The app team works from `docs/app-api-contract.md` and `docs/openapi.json`. The **live SOS pilot** is specified in `docs/live-sos-plan.md`; where that plan changes behaviour, it wins over this PRD until this document is updated. |
 
 Section numbers are kept compatible with the references in `sos-app-PRD.md` and `integration.md` (§5 Core, §6 department, §7.2 to §7.5 public API, §8 delivery, §10.2 pinning, §10.5 retention, §13.2 startup checks).
 
@@ -16,7 +16,11 @@ Section numbers are kept compatible with the references in `sos-app-PRD.md` and 
 
 ## 1. Summary
 
-The relay is the only server the public SOS app talks to. It checks that a request comes from a genuine app install, applies abuse limits, and creates a **pending call** in one Resgrid department. It then tracks that call and reports a simple status back to the app: `queued`, `received`, `dispatched`, `closed` or `failed`.
+The relay is the only server the public SOS app talks to. For the **live SOS pilot**, a **signed-in user**
+sends a one-tap SOS with their access token (no device registration or attestation), the relay creates a
+**pending call** in one Resgrid department, accepts an optional **voice recording** attached via Core
+`SaveCallFile`, and streams **live call and unit status** to the app over a WebSocket. Detail:
+[`docs/live-sos-plan.md`](docs/live-sos-plan.md).
 
 The relay holds the department's Resgrid API key. The app holds no secret.
 
@@ -27,20 +31,26 @@ The rule that shapes most decisions here: **never let a caller believe an SOS re
 ## 2. Goals and non-goals
 
 ### Goals
-- G1. Accept an SOS from an attested app install and create a pending call in Resgrid, exactly once.
+- G1. Accept an SOS from a signed-in user and create a pending call in Resgrid, exactly once.
 - G2. Answer `POST /v1/sos` within 8 seconds, with a true statement of what happened.
 - G3. Lose no accepted SOS to a restart, a crash or a Core outage shorter than 30 minutes.
 - G4. Protect dispatchers from floods and repeat hoaxers without locking out real callers.
 - G5. Keep personal data for 30 days and no longer.
 - G6. Tell an operator at once when SOS delivery is broken.
 
-### Non-goals (v1)
+### Non-goals (v1 / pilot)
 - More than one department. The schema is single-tenant; a second department is a later migration.
-- SMS phone verification (§7.3).
+- SMS phone verification before public release (pilot uses password + phone only; plan §9).
+- Device registration, Play Integrity and App Attest on the SOS path (removed for pilot; plan D2, D19).
 - Cancelling or editing an SOS.
-- Push notifications, chat, media upload.
+- Push notifications and chat.
 - An admin UI, operator accounts or roles.
 - Provisioning infrastructure, DNS, certificates or a live Resgrid key. The build ends at a relay that runs under Docker Compose and is ready to deploy on Railway (§14).
+
+### In scope for the live SOS pilot (see plan)
+- **Media upload:** one voice recording per SOS (AAC `.m4a`), attach via `SaveCallFile`.
+- **Live status:** WebSocket snapshots with call status, recording attach state, and units en route (from
+  `GetAllUnitStatuses`), plus caller location on the relay for distance only.
 
 ---
 
@@ -71,7 +81,7 @@ The rule that shapes most decisions here: **never let a caller believe an SOS re
 `integration.md` is the specification. This section only lists what the relay uses.
 
 ### 5.1 Endpoints
-`POST Calls/SaveCall`, `GET Calls/GetCall`, `GET Calls/GetPendingCalls`, `GET Calls/GetNewCallFieldPolicy`, `GET CallTypes/GetAllCallTypes`, `GET CallPriorities/GetAllCallPriorites`.
+`POST Calls/SaveCall`, `GET Calls/GetCall`, `GET Calls/GetPendingCalls`, `GET Calls/GetNewCallFieldPolicy`, `GET CallTypes/GetAllCallTypes`, `GET CallPriorities/GetAllCallPriorites`, `POST CallFiles/SaveCallFile`, `GET UnitStatus/GetAllUnitStatuses` (scopes and behaviour in `integration.md`).
 
 ### 5.2 Rules the relay follows
 - Auth with `X-Resgrid-ApiKey` only. Never send `Authorization` to Core.

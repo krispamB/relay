@@ -40,8 +40,38 @@ export const REDACT_PATHS = [
   '*.*.fullName',
   '*.*.email',
   '*.*.phone',
+  // Recordings (docs/live-sos-plan.md §4.4): the audio and Core's `Data` field (base64 of the audio)
+  // never reach the log. A request or error log carries the audio under one of these names.
+  'Data',
+  '*.Data',
+  '*.*.Data',
+  'bytes',
+  '*.bytes',
+  '*.*.bytes',
+  'audio',
+  '*.audio',
+  'body',
+  '*.body',
+  '*.*.body',
   'req.headers["idempotency-key"]',
   'headers["idempotency-key"]',
+  // The live socket (docs/live-sos-plan.md §5.2): an in-band `auth` message carries `token`, and the
+  // caller's position never reaches the log, whether as a message, a fix or a submission row.
+  'token',
+  '*.token',
+  '*.*.token',
+  'lat',
+  '*.lat',
+  '*.*.lat',
+  'lon',
+  '*.lon',
+  '*.*.lon',
+  'location',
+  '*.location',
+  'live_lat',
+  '*.live_lat',
+  'live_lon',
+  '*.live_lon',
 ];
 
 /** Shared with tests so a buffered logger redacts exactly what production does. */

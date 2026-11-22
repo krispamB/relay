@@ -7,8 +7,7 @@ describe('prom metrics', () => {
     const m = createPromMetrics();
     m.inc(METRICS.submissions, { outcome: 'received' });
     m.inc(METRICS.coreCalls, { endpoint: 'SaveCall', result: 'ok' }, 3);
-    m.inc(METRICS.attestations, { platform: 'ios', phase: 'request', result: 'ok' });
-    m.inc(METRICS.rateLimited, { rule: 'device' });
+    m.inc(METRICS.rateLimited, { rule: 'sos_per_user' });
     m.observe(METRICS.coreLatency, 0.3, { endpoint: 'SaveCall' });
     m.observe(METRICS.sosLatency, 7.5);
     m.set(METRICS.queueDepth, 4);
@@ -18,8 +17,8 @@ describe('prom metrics', () => {
     expect(out).toContain('# TYPE sos_submissions_total counter');
     expect(out).toContain('sos_submissions_total{outcome="received"} 1');
     expect(out).toContain('sos_core_calls_total{endpoint="SaveCall",result="ok"} 3');
-    expect(out).toContain('sos_attestations_total{platform="ios",phase="request",result="ok"} 1');
-    expect(out).toContain('sos_rate_limited_total{rule="device"} 1');
+    expect(out).not.toContain('sos_attestations_total');
+    expect(out).toContain('sos_rate_limited_total{rule="sos_per_user"} 1');
     expect(out).toContain('# TYPE sos_core_call_duration_seconds histogram');
     expect(out).toContain('sos_core_call_duration_seconds_bucket{le="0.5",endpoint="SaveCall"} 1');
     expect(out).toContain('sos_request_duration_seconds_bucket{le="8"} 1');

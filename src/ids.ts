@@ -6,8 +6,9 @@ export function newReceiptId(nowMs: number): string {
   return `sos_${ulid(nowMs)}`;
 }
 
-export function newDeviceId(nowMs: number): string {
-  return `dev_${ulid(nowMs)}`;
+/** Recording id (docs/live-sos-plan.md §4.1). */
+export function newRecordingId(nowMs: number): string {
+  return `rec_${ulid(nowMs)}`;
 }
 
 export function newBlockId(nowMs: number): string {

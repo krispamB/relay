@@ -3,7 +3,6 @@
   "version": "0.1.0",
   "scripts": {
     "test": "vitest run",
-    "test:auth-on": "TEST_AUTH_ENABLED=true vitest run",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/src/main.js",
     "dev": "tsx watch src/main.ts",
@@ -13,6 +12,7 @@
     "lint": "biome check .",
     "format": "biome check --write .",
     "mock-core": "tsx mock-core/main.ts",
+    "live-checklist": "tsx scripts/live-checklist.ts",
     "openapi": "tsx scripts/export-openapi.ts"
   },
   "repository": {
@@ -26,12 +26,12 @@
   "private": true,
   "dependencies": {
     "@fastify/swagger": "^9.9.5",
+    "@fastify/swagger-ui": "^6.1.3",
     "@fastify/type-provider-typebox": "^6.3.0",
+    "@fastify/websocket": "^11.3.7",
     "@node-rs/argon2": "^2.2.2",
     "@sinclair/typebox": "^0.34.52",
-    "cbor-x": "^1.6.9",
     "fastify": "^5.12.8",
-    "google-auth-library": "^11.3.4",
     "kysely": "^0.29.9",
     "libphonenumber-js": "^1.13.16",
     "pg": "^8.23.1",
@@ -42,14 +42,15 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.8",
-    "@peculiar/x509": "^2.2.0",
     "@testcontainers/postgresql": "^12.2.1",
     "@types/node": "^22.20.5",
     "@types/pg": "^8.23.1",
+    "@types/ws": "^8.18.2",
     "testcontainers": "^12.2.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.0",
+    "ws": "^8.23.0"
   },
   "engines": {
     "node": ">=22"

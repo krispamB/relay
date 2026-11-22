@@ -43,7 +43,7 @@ async function setup(opts: { perIp?: number; logLines?: string[] } = {}) {
   const base = testConfig();
   const config = {
     ...base,
-    auth: { enabled: true, tokenSecret: SECRET },
+    auth: { tokenSecret: SECRET },
     limits: { ...base.limits, ...(opts.perIp === undefined ? {} : { requestsPerIpPerMinute: opts.perIp }) },
   };
   const lines = opts.logLines;
@@ -68,7 +68,6 @@ async function newUser(): Promise<string> {
       id,
       full_name: 'Ada Okafor',
       phone: `+234803${String(userSeq).padStart(7, '0')}`,
-      email: `user${userSeq}@example.com`,
       password_hash: '$argon2id$stub',
       created_at: now,
       updated_at: now,

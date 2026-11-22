@@ -6,10 +6,6 @@
   },
   "components": {
     "securitySchemes": {
-      "deviceToken": {
-        "type": "http",
-        "scheme": "bearer"
-      },
       "accessToken": {
         "type": "http",
         "scheme": "bearer",
@@ -217,328 +213,13 @@
         }
       }
     },
-    "/v1/devices/nonce": {
-      "get": {
-        "operationId": "getDeviceNonce",
-        "summary": "Get a single-use registration nonce, valid for 5 minutes.",
-        "tags": [
-          "devices"
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "nonce",
-                    "expiresAt"
-                  ],
-                  "properties": {
-                    "nonce": {
-                      "pattern": "^[A-Za-z0-9_-]{43}$",
-                      "description": "The nonce from GET /v1/devices/nonce, as-is. URL-safe base64 without padding, 43 characters.",
-                      "type": "string"
-                    },
-                    "expiresAt": {
-                      "format": "date-time",
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Error body (PRD §7). A 403 never says why.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "description": "Error body (PRD §7). A 403 never says why.",
-                  "type": "object",
-                  "required": [
-                    "error"
-                  ],
-                  "properties": {
-                    "error": {
-                      "type": "object",
-                      "required": [
-                        "code",
-                        "message"
-                      ],
-                      "properties": {
-                        "code": {
-                          "type": "string"
-                        },
-                        "message": {
-                          "type": "string"
-                        },
-                        "retryAfterSeconds": {
-                          "minimum": 1,
-                          "type": "integer"
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/devices/register": {
-      "post": {
-        "operationId": "registerDevice",
-        "summary": "Register or renew a device with a platform attestation.",
-        "tags": [
-          "devices"
-        ],
-        "description": "Send the current device token as Authorization: Bearer to renew: the deviceId is kept, even if the token has expired. Without a known token a new device is created. Fetch a new nonce after any failure.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "description": "attestation is required in enforce mode; it may be left out only against a relay in permissive mode.",
-                "anyOf": [
-                  {
-                    "additionalProperties": false,
-                    "type": "object",
-                    "required": [
-                      "platform",
-                      "nonce"
-                    ],
-                    "properties": {
-                      "platform": {
-                        "type": "string",
-                        "enum": [
-                          "android"
-                        ]
-                      },
-                      "nonce": {
-                        "pattern": "^[A-Za-z0-9_-]{43}$",
-                        "description": "The nonce from GET /v1/devices/nonce, as-is. URL-safe base64 without padding, 43 characters.",
-                        "type": "string"
-                      },
-                      "attestation": {
-                        "additionalProperties": false,
-                        "type": "object",
-                        "required": [
-                          "integrityToken"
-                        ],
-                        "properties": {
-                          "integrityToken": {
-                            "minLength": 1,
-                            "maxLength": 16384,
-                            "description": "IntegrityTokenResponse.token() from a classic Play Integrity request with the nonce, as-is.",
-                            "type": "string"
-                          }
-                        }
-                      }
-                    }
-                  },
-                  {
-                    "additionalProperties": false,
-                    "type": "object",
-                    "required": [
-                      "platform",
-                      "nonce"
-                    ],
-                    "properties": {
-                      "platform": {
-                        "type": "string",
-                        "enum": [
-                          "ios"
-                        ]
-                      },
-                      "nonce": {
-                        "pattern": "^[A-Za-z0-9_-]{43}$",
-                        "description": "The nonce from GET /v1/devices/nonce, as-is. URL-safe base64 without padding, 43 characters.",
-                        "type": "string"
-                      },
-                      "attestation": {
-                        "additionalProperties": false,
-                        "type": "object",
-                        "required": [
-                          "keyId",
-                          "attestationObject"
-                        ],
-                        "properties": {
-                          "keyId": {
-                            "minLength": 1,
-                            "maxLength": 128,
-                            "description": "The App Attest key id from generateKey(), standard base64.",
-                            "type": "string"
-                          },
-                          "attestationObject": {
-                            "minLength": 1,
-                            "maxLength": 87384,
-                            "description": "attestKey(keyId, clientDataHash: SHA-256(UTF-8(nonce))), standard base64.",
-                            "type": "string"
-                          }
-                        }
-                      }
-                    }
-                  }
-                ]
-              }
-            }
-          },
-          "description": "attestation is required in enforce mode; it may be left out only against a relay in permissive mode."
-        },
-        "security": [
-          {
-            "deviceToken": []
-          },
-          {}
-        ],
-        "responses": {
-          "201": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "deviceId",
-                    "deviceToken",
-                    "expiresAt"
-                  ],
-                  "properties": {
-                    "deviceId": {
-                      "pattern": "^dev_[0-9A-HJKMNP-TV-Z]{26}$",
-                      "type": "string"
-                    },
-                    "deviceToken": {
-                      "description": "Opaque. Send as Authorization: Bearer. Store securely.",
-                      "type": "string"
-                    },
-                    "expiresAt": {
-                      "format": "date-time",
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Error body (PRD §7). A 403 never says why.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "description": "Error body (PRD §7). A 403 never says why.",
-                  "type": "object",
-                  "required": [
-                    "error"
-                  ],
-                  "properties": {
-                    "error": {
-                      "type": "object",
-                      "required": [
-                        "code",
-                        "message"
-                      ],
-                      "properties": {
-                        "code": {
-                          "type": "string"
-                        },
-                        "message": {
-                          "type": "string"
-                        },
-                        "retryAfterSeconds": {
-                          "minimum": 1,
-                          "type": "integer"
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Error body (PRD §7). A 403 never says why.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "description": "Error body (PRD §7). A 403 never says why.",
-                  "type": "object",
-                  "required": [
-                    "error"
-                  ],
-                  "properties": {
-                    "error": {
-                      "type": "object",
-                      "required": [
-                        "code",
-                        "message"
-                      ],
-                      "properties": {
-                        "code": {
-                          "type": "string"
-                        },
-                        "message": {
-                          "type": "string"
-                        },
-                        "retryAfterSeconds": {
-                          "minimum": 1,
-                          "type": "integer"
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Error body (PRD §7). A 403 never says why.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "description": "Error body (PRD §7). A 403 never says why.",
-                  "type": "object",
-                  "required": [
-                    "error"
-                  ],
-                  "properties": {
-                    "error": {
-                      "type": "object",
-                      "required": [
-                        "code",
-                        "message"
-                      ],
-                      "properties": {
-                        "code": {
-                          "type": "string"
-                        },
-                        "message": {
-                          "type": "string"
-                        },
-                        "retryAfterSeconds": {
-                          "minimum": 1,
-                          "type": "integer"
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/v1/sos": {
       "post": {
         "summary": "Send an SOS",
         "tags": [
           "sos"
         ],
-        "description": "Order of checks: device token (401), device block (403), headers and body (400), attestation (403), intake (404/410), replay of the same Idempotency-Key (201/202), open SOS (409), phone block (403), rate limits (429, or 503 for the whole-intake breaker), availability (503), then persist and deliver. A 503 can also come after the SOS was saved, when Core refuses the relay's API key or delivery is paused before the inline attempt: the SOS is then marked failed, will never be delivered, and a replay of the same Idempotency-Key returns 201 `failed`.",
+        "description": "One tap: the body names the intake and where the caller is; the name and callback number are the account's. Order of checks: access token (401), user block (403), headers and body (400), intake (404/410), replay of the same Idempotency-Key (201/202), open SOS (409), phone block (403), rate limits (429, or 503 for the whole-intake breaker), availability (503), then persist and deliver. A 503 can also come after the SOS was saved, when Core refuses the relay's API key or delivery is paused before the inline attempt: the SOS is then marked failed, will never be delivered, and a replay of the same Idempotency-Key returns 201 `failed`.",
         "requestBody": {
           "required": true,
           "content": {
@@ -547,25 +228,12 @@
                 "additionalProperties": false,
                 "type": "object",
                 "required": [
-                  "intakeCode",
-                  "nature",
-                  "phone"
+                  "intakeCode"
                 ],
                 "properties": {
                   "intakeCode": {
                     "minLength": 1,
                     "maxLength": 64,
-                    "type": "string"
-                  },
-                  "nature": {
-                    "minLength": 1,
-                    "maxLength": 40,
-                    "description": "One of the intake's nature ids.",
-                    "type": "string"
-                  },
-                  "phone": {
-                    "pattern": "^\\+[1-9][0-9]{1,14}$",
-                    "description": "Callback number in E.164, valid per libphonenumber-js.",
                     "type": "string"
                   },
                   "location": {
@@ -623,14 +291,6 @@
                   "address": {
                     "description": "Up to 500 characters after sanitising. Required when there is no usable location.",
                     "type": "string"
-                  },
-                  "name": {
-                    "description": "Up to 100 characters after sanitising.",
-                    "type": "string"
-                  },
-                  "details": {
-                    "description": "Up to 1000 characters after sanitising.",
-                    "type": "string"
                   }
                 }
               }
@@ -647,21 +307,11 @@
             "name": "idempotency-key",
             "required": true,
             "description": "UUID. One per SOS, reused on every retry of it."
-          },
-          {
-            "schema": {
-              "maxLength": 16384,
-              "type": "string"
-            },
-            "in": "header",
-            "name": "x-attestation",
-            "required": false,
-            "description": "Fresh per attempt. See docs/attestation-contract.md."
           }
         ],
         "security": [
           {
-            "deviceToken": []
+            "accessToken": []
           }
         ],
         "responses": {
@@ -674,7 +324,6 @@
                   "type": "object",
                   "required": [
                     "receiptId",
-                    "statusToken",
                     "reference",
                     "status",
                     "submittedAt"
@@ -682,10 +331,6 @@
                   "properties": {
                     "receiptId": {
                       "description": "`sos_` + ULID.",
-                      "type": "string"
-                    },
-                    "statusToken": {
-                      "description": "Send as `X-Status-Token` to the status endpoint.",
                       "type": "string"
                     },
                     "reference": {
@@ -744,7 +389,6 @@
                   "type": "object",
                   "required": [
                     "receiptId",
-                    "statusToken",
                     "reference",
                     "status",
                     "submittedAt"
@@ -752,10 +396,6 @@
                   "properties": {
                     "receiptId": {
                       "description": "`sos_` + ULID.",
-                      "type": "string"
-                    },
-                    "statusToken": {
-                      "description": "Send as `X-Status-Token` to the status endpoint.",
                       "type": "string"
                     },
                     "reference": {
@@ -841,11 +481,11 @@
             }
           },
           "401": {
-            "description": "Device token missing, invalid or expired. Re-register, then retry with the same key.",
+            "description": "The access token is missing or not valid (`invalid_token`), has expired (`token_expired`: refresh, then retry with the same key), or its session has ended (`session_revoked`: sign in again).",
             "content": {
               "application/json": {
                 "schema": {
-                  "description": "Device token missing, invalid or expired. Re-register, then retry with the same key.",
+                  "description": "The access token is missing or not valid (`invalid_token`), has expired (`token_expired`: refresh, then retry with the same key), or its session has ended (`session_revoked`: sign in again).",
                   "type": "object",
                   "required": [
                     "error"
@@ -946,16 +586,15 @@
             }
           },
           "409": {
-            "description": "An SOS from this device is already open; its receipt and status token are returned.",
+            "description": "An SOS from this account is already open; its receipt is returned.",
             "content": {
               "application/json": {
                 "schema": {
-                  "description": "An SOS from this device is already open; its receipt and status token are returned.",
+                  "description": "An SOS from this account is already open; its receipt is returned.",
                   "type": "object",
                   "required": [
                     "error",
                     "receiptId",
-                    "statusToken",
                     "reference",
                     "status",
                     "submittedAt"
@@ -982,10 +621,6 @@
                     },
                     "receiptId": {
                       "description": "`sos_` + ULID.",
-                      "type": "string"
-                    },
-                    "statusToken": {
-                      "description": "Send as `X-Status-Token` to the status endpoint.",
                       "type": "string"
                     },
                     "reference": {
@@ -1146,7 +781,7 @@
     "/v1/sos/{receiptId}/status": {
       "get": {
         "operationId": "getSosStatus",
-        "summary": "Status of one SOS. Needs the X-Status-Token returned when the SOS was accepted.",
+        "summary": "Status of one of the signed-in user's SOS.",
         "parameters": [
           {
             "schema": {
@@ -1155,15 +790,11 @@
             "in": "path",
             "name": "receiptId",
             "required": true
-          },
+          }
+        ],
+        "security": [
           {
-            "schema": {
-              "type": "string"
-            },
-            "in": "header",
-            "name": "x-status-token",
-            "required": false,
-            "description": "The status token returned with the receipt."
+            "accessToken": []
           }
         ],
         "responses": {
@@ -1172,15 +803,36 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": false,
                   "type": "object",
                   "required": [
-                    "status",
+                    "type",
+                    "version",
+                    "receiptId",
                     "reference",
-                    "updatedAt"
+                    "status",
+                    "updatedAt",
+                    "recording",
+                    "units"
                   ],
                   "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "state"
+                      ]
+                    },
+                    "version": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "receiptId": {
+                      "type": "string"
+                    },
+                    "reference": {
+                      "type": "string"
+                    },
                     "status": {
-                      "description": "Where the SOS is now.",
                       "anyOf": [
                         {
                           "type": "string",
@@ -1214,14 +866,119 @@
                         }
                       ]
                     },
-                    "reference": {
-                      "description": "Short code the caller can quote, such as SOS-7KQ2.",
-                      "type": "string"
-                    },
                     "updatedAt": {
                       "format": "date-time",
-                      "description": "Time of the last status change.",
                       "type": "string"
+                    },
+                    "recording": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "required": [
+                        "status"
+                      ],
+                      "properties": {
+                        "status": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "none"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "pending"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "attached"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "dropped"
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "units": {
+                      "type": "array",
+                      "items": {
+                        "additionalProperties": false,
+                        "type": "object",
+                        "required": [
+                          "key",
+                          "type",
+                          "status"
+                        ],
+                        "properties": {
+                          "key": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "status": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "lat": {
+                            "type": "number"
+                          },
+                          "lon": {
+                            "type": "number"
+                          },
+                          "distanceM": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "updatedAt": {
+                            "format": "date-time",
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
                     }
                   }
                 }
@@ -1299,6 +1056,445 @@
         }
       }
     },
+    "/v1/sos/{receiptId}/recording": {
+      "post": {
+        "operationId": "uploadSosRecording",
+        "summary": "Upload the voice recording of an SOS.",
+        "tags": [
+          "sos"
+        ],
+        "description": "The raw `.m4a` (AAC in an MP4 container) as the request body, `Content-Type: audio/mp4`, at most 400 000 bytes. The relay checks the size, the `ftyp` box and the declared duration; it does not decode the audio. It stores the recording and attaches it to the Core call once the call exists, retrying like delivery. Only the SOS's owner can upload: anyone else's receipt is a 404.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "audio/mp4": {
+              "schema": {
+                "format": "binary",
+                "description": "The raw audio bytes."
+              }
+            }
+          },
+          "description": "The raw audio bytes."
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "receiptId",
+            "required": true
+          },
+          {
+            "schema": {
+              "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+              "type": "string"
+            },
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "description": "UUID. One per recording, reused on every retry of the same bytes."
+          },
+          {
+            "schema": {
+              "pattern": "^[1-9][0-9]{0,4}$",
+              "type": "string"
+            },
+            "in": "header",
+            "name": "x-recording-duration-ms",
+            "required": true,
+            "description": "Length of the recording in milliseconds: an integer from 1 to 60000."
+          }
+        ],
+        "security": [
+          {
+            "accessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A replay: the same Idempotency-Key and the same bytes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "A replay: the same Idempotency-Key and the same bytes.",
+                  "type": "object",
+                  "required": [
+                    "recordingId",
+                    "seq",
+                    "status"
+                  ],
+                  "properties": {
+                    "recordingId": {
+                      "description": "`rec_` + ULID.",
+                      "type": "string"
+                    },
+                    "seq": {
+                      "minimum": 1,
+                      "description": "1-based position among the SOS recordings.",
+                      "type": "integer"
+                    },
+                    "status": {
+                      "description": "`pending` until the relay has attached it to the Core call. A replay answers with the current status.",
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "pending"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "attached"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "dropped"
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Stored; the relay will attach it to the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Stored; the relay will attach it to the call.",
+                  "type": "object",
+                  "required": [
+                    "recordingId",
+                    "seq",
+                    "status"
+                  ],
+                  "properties": {
+                    "recordingId": {
+                      "description": "`rec_` + ULID.",
+                      "type": "string"
+                    },
+                    "seq": {
+                      "minimum": 1,
+                      "description": "1-based position among the SOS recordings.",
+                      "type": "integer"
+                    },
+                    "status": {
+                      "description": "`pending` until the relay has attached it to the Core call. A replay answers with the current status.",
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "pending"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "attached"
+                          ]
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "dropped"
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty body, not an MP4 container, or bad headers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Empty body, not an MP4 container, or bad headers.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The access token is missing, not valid, or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "The access token is missing, not valid, or expired.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found: unknown receipt, or not the signed-in user’s.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Not found: unknown receipt, or not the signed-in user’s.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`recording_limit`: the SOS already holds its recordings (`RECORDINGS_PER_SOS`). `sos_closed`: the SOS is closed or failed, so the audio can never be attached.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "`recording_limit`: the SOS already holds its recordings (`RECORDINGS_PER_SOS`). `sos_closed`: the SOS is closed or failed, so the audio can never be attached.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`: over 400 000 bytes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "`payload_too_large`: over 400 000 bytes.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The content type is not `audio/mp4`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "The content type is not `audio/mp4`.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`idempotency_key_reused`: the same key, different bytes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "`idempotency_key_reused`: the same key, different bytes.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Rate limited.",
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAfterSeconds": {
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/auth/signup": {
       "post": {
         "summary": "Create an account and sign in",
@@ -1316,7 +1512,6 @@
                 "required": [
                   "fullName",
                   "phone",
-                  "email",
                   "password",
                   "device"
                 ],
@@ -1329,11 +1524,6 @@
                   "phone": {
                     "pattern": "^\\+[1-9]\\d{6,14}$",
                     "description": "E.164.",
-                    "type": "string"
-                  },
-                  "email": {
-                    "maxLength": 254,
-                    "description": "Trimmed and lower-cased by the server.",
                     "type": "string"
                   },
                   "password": {
@@ -1411,7 +1601,6 @@
                         "id",
                         "fullName",
                         "phone",
-                        "email",
                         "phoneVerified",
                         "createdAt"
                       ],
@@ -1423,9 +1612,6 @@
                           "type": "string"
                         },
                         "phone": {
-                          "type": "string"
-                        },
-                        "email": {
                           "type": "string"
                         },
                         "phoneVerified": {
@@ -1736,7 +1922,7 @@
         "tags": [
           "auth"
         ],
-        "description": "Returns the user and a new session (a new token family). An unknown email and a wrong password are both 401 `invalid_credentials`. Limits: 20 per hour per client IP and 10 per hour per email address. Every validated attempt counts, whether or not the password matches.",
+        "description": "Returns the user and a new session (a new token family). An unknown phone number and a wrong password are both 401 `invalid_credentials`. Limits: 20 per hour per client IP and 10 per hour per phone number. Every validated attempt counts, whether or not the password matches.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1745,13 +1931,13 @@
                 "additionalProperties": false,
                 "type": "object",
                 "required": [
-                  "email",
+                  "phone",
                   "password",
                   "device"
                 ],
                 "properties": {
-                  "email": {
-                    "description": "Trimmed and lower-cased by the server.",
+                  "phone": {
+                    "description": "The E.164 number the account signed up with. Trimmed by the server.",
                     "type": "string"
                   },
                   "password": {
@@ -1815,7 +2001,6 @@
                         "id",
                         "fullName",
                         "phone",
-                        "email",
                         "phoneVerified",
                         "createdAt"
                       ],
@@ -1827,9 +2012,6 @@
                           "type": "string"
                         },
                         "phone": {
-                          "type": "string"
-                        },
-                        "email": {
                           "type": "string"
                         },
                         "phoneVerified": {
@@ -2542,7 +2724,6 @@
                         "id",
                         "fullName",
                         "phone",
-                        "email",
                         "phoneVerified",
                         "createdAt"
                       ],
@@ -2554,9 +2735,6 @@
                           "type": "string"
                         },
                         "phone": {
-                          "type": "string"
-                        },
-                        "email": {
                           "type": "string"
                         },
                         "phoneVerified": {

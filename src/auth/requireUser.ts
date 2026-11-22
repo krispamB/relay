@@ -12,10 +12,17 @@ import type { FastifyRequest } from 'fastify';
 import { WindowLimiter } from '../app.js';
 import { MINUTE } from '../clock.js';
 import type { AppContext } from '../context.js';
-import { bearerToken } from '../devices/auth.js';
 import { authErrors } from './errors.js';
 import type { AuthKeys } from './keys.js';
 import { verifyAccessToken } from './tokens.js';
+
+/** The token of an `Authorization: Bearer <token>` header (scheme matched exactly), or undefined. */
+export function bearerToken(req: FastifyRequest): string | undefined {
+  const header = req.headers.authorization;
+  if (!header?.startsWith('Bearer ')) return undefined;
+  const token = header.slice(7).trim();
+  return token === '' ? undefined : token;
+}
 
 /** Contract §5: everything except sign-up and refresh, keyed by user. */
 const USER_REQUESTS_PER_MINUTE = 120;
@@ -39,6 +46,8 @@ export interface AuthenticatedAccess {
   userId: string;
   familyId: string;
   jti: string;
+  /** The token's `exp`. The live socket closes when it passes without a re-auth. */
+  expiresAt: Date;
 }
 
 export interface AuthenticateOptions {
@@ -54,17 +63,17 @@ export interface AuthenticateOptions {
 type AuthContext = Pick<AppContext, 'db' | 'clock'>;
 
 /**
- * Verifies the bearer access token. Throws AuthError. The per-user limit is applied only after
- * the token (and, when checked, the family) has been accepted, so a rejected request does not
- * spend the user's budget.
+ * Verifies one access token: signature, expiry and (unless `checkFamily` is false) a live family of
+ * the same user. Throws AuthError (`invalid_token`, `token_expired`, `session_revoked`). No rate
+ * limit: `authenticate` adds the per-user limit for HTTP requests; the live socket calls this
+ * directly, on the upgrade, on every in-band `auth` and on every message as a revocation backstop.
  */
-export async function authenticate(
+export async function verifyAccess(
   ctx: AuthContext,
   keys: AuthKeys,
-  req: FastifyRequest,
+  token: string | undefined,
   options: AuthenticateOptions,
 ): Promise<AuthenticatedAccess> {
-  const token = bearerToken(req);
   if (!token) throw authErrors.invalidToken();
 
   const check = verifyAccessToken(keys.access, token, ctx.clock.now());
@@ -85,16 +94,32 @@ export async function authenticate(
     if (family.revoked_at) throw authErrors.sessionRevoked();
   }
 
+  return { userId: claims.sub, familyId: claims.fam, jti: claims.jti, expiresAt: claims.exp };
+}
+
+/**
+ * Verifies the bearer access token. Throws AuthError. The per-user limit is applied only after
+ * the token (and, when checked, the family) has been accepted, so a rejected request does not
+ * spend the user's budget.
+ */
+export async function authenticate(
+  ctx: AuthContext,
+  keys: AuthKeys,
+  req: FastifyRequest,
+  options: AuthenticateOptions,
+): Promise<AuthenticatedAccess> {
+  const access = await verifyAccess(ctx, keys, bearerToken(req), options);
+
   // Without the family check the token may be old or revoked (sign-out): it gets a bucket of its
   // own family, so it can never spend the budget of the user's live session.
-  const bucket = options.checkFamily === false ? `family:${claims.fam}` : `user:${claims.sub}`;
+  const bucket = options.checkFamily === false ? `family:${access.familyId}` : `user:${access.userId}`;
   const retryAfterSeconds = limiterFor(ctx).hit(bucket, ctx.clock.now().getTime());
   if (retryAfterSeconds > 0) {
-    req.log.warn({ userId: claims.sub }, 'authenticated request refused: rate limit');
+    req.log.warn({ userId: access.userId }, 'authenticated request refused: rate limit');
     throw authErrors.rateLimited(retryAfterSeconds);
   }
 
-  return { userId: claims.sub, familyId: claims.fam, jti: claims.jti };
+  return access;
 }
 
 /** `authenticate` with an unexpired access token and a live family. */
