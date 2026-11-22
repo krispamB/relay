@@ -2,23 +2,26 @@
  * Live Core checklist: integration.md section 11, run by hand against a REAL Resgrid test department
  * before go-live. Not part of the automated suite.
  *
- *   RESGRID_API_BASE=https://... RESGRID_API_KEY=rgk_... RESGRID_CALL_TYPE_NAME="Public SOS" \
- *   RESGRID_PRIORITY_ID=3 npx tsx scripts/live-checklist.ts --yes-create-test-calls [--no-interactive]
+ *   npm run live-checklist -- --yes-create-test-calls [--no-interactive]
+ *
+ * The four RESGRID_* variables come from the shell or from `.env` in the working directory.
  *
  * THIS CREATES REAL PENDING CALLS in the department the key belongs to. Core's API gives the relay
  * no way to delete a call, so every call created here must be closed or deleted by hand afterwards.
  */
 import { randomBytes } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
+import { parseEnv } from 'node:util';
 import { request } from 'undici';
 import { createCoreClient } from '../src/core/client.js';
 import { silentLogger } from '../src/logger.js';
 import { NoopMetrics } from '../src/metrics.js';
 
 const PREFIX = '[RELAY CHECKLIST]';
-const USAGE = `Usage: npx tsx scripts/live-checklist.ts --yes-create-test-calls [--no-interactive]
+const USAGE = `Usage: npm run live-checklist -- --yes-create-test-calls [--no-interactive]
 
-Environment (all required):
+Environment (all required; from the shell, or from .env in the working directory, the shell winning):
   RESGRID_API_BASE        e.g. https://api.resgrid.example (no /api/v4)
   RESGRID_API_KEY         the relay's key (scopes calls.create, calls.read, calls.update, units.read, reference.read)
   RESGRID_CALL_TYPE_NAME  the call type name the relay will use
@@ -45,6 +48,23 @@ for (const a of args) {
 if (args.has('--help')) {
   console.log(USAGE);
   process.exit(0);
+}
+
+// A `.env` in the working directory fills in what the shell does not set (the shell wins), like
+// `node --env-file`. Only variable names are printed, never values.
+loadDotEnv('.env');
+
+function loadDotEnv(path: string): void {
+  if (!existsSync(path)) return;
+  const parsed = parseEnv(readFileSync(path, 'utf8'));
+  const loaded: string[] = [];
+  for (const [k, v] of Object.entries(parsed)) {
+    if (process.env[k] === undefined) {
+      process.env[k] = v;
+      loaded.push(k);
+    }
+  }
+  if (loaded.length > 0) console.log(`Read ${loaded.join(', ')} from ${path}.`);
 }
 
 const env = {

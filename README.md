@@ -276,11 +276,10 @@ The attach worker (`recordings` job) sends each stored recording to Core with `S
 None of this is done. Do not point a public app at this relay until each item is ticked.
 
 1. **Live checklist against a real Core.** [`scripts/live-checklist.ts`](scripts/live-checklist.ts) automates [`integration.md` section 11](integration.md#11-integration-test-checklist) against a real Resgrid **test** department. It **creates real pending calls** in the department the key belongs to, and Core's API offers the relay no way to delete them, so you must close or delete them by hand. It needs an explicit flag:
+   It reads `RESGRID_API_BASE`, `RESGRID_API_KEY`, `RESGRID_CALL_TYPE_NAME` and `RESGRID_PRIORITY_ID` from the shell, or from `.env` in the repo root (the shell wins):
    ```sh
-   RESGRID_API_BASE=https://... RESGRID_API_KEY=rgk_... \
-   RESGRID_CALL_TYPE_NAME="Public SOS" RESGRID_PRIORITY_ID=3 \
-   npx tsx scripts/live-checklist.ts --yes-create-test-calls            # interactive: asks you to dispatch, close, delete, paste throwaway keys
-   npx tsx scripts/live-checklist.ts --yes-create-test-calls --no-interactive   # skips every item that needs a human
+   npm run live-checklist -- --yes-create-test-calls                    # interactive: asks you to dispatch, close, delete, paste throwaway keys
+   npm run live-checklist -- --yes-create-test-calls --no-interactive   # skips every item that needs a human
    ```
    Items that need a human or another key (no notification sent, a key without `calls.create`, an address outside the IP allowlist, revoking a key, changing the field policy, dispatching and closing a call) are printed as manual steps; a `--no-interactive` run leaves them **unproven**. It also records the two measurements the PRD wants: what `GetCall` returns for a deleted call, and the longest `Name`, `Nature`, `Address` and `Note` Core accepts, and exercises `SaveCallFile` and `GetAllUnitStatuses`. It has been run only against the mock Core.
 2. **Acceptance criteria.** Walk through [PRD section 15.3](sos-relay-PRD.md#153-acceptance-criteria) (AC1 to AC16) in the deployed environment, including killing the process and restarting, and a Core 401.
