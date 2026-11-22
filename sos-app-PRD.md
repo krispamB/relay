@@ -156,6 +156,8 @@ Base URL from `EXPO_PUBLIC_RELAY_BASE_URL`. JSON over TLS. The app sends no cook
 | `GET /v1/sos/:receiptId/status` | Polling, with `X-Status-Token` |
 | `POST /v1/devices/verify-phone/*` | Only when the intake has `requireVerifiedPhone: true` |
 
+The app never calls Resgrid. The relay does, with one department API key per intake. Which Core calls exist, what they return, and how that becomes `received` / `dispatched` / `closed` is §15.
+
 ### 7.1 Handling `POST /v1/sos` responses
 
 | Response | App behaviour |
@@ -332,6 +334,124 @@ Reviewers will press the button. The review build or review notes must route the
 | Q1 | **Relay contract: what is the per-request attestation bound to?** | Relay §7.4 asks for a fresh assertion on each SOS but doesn't say what it signs. Proposal: the SHA-256 of `Idempotency-Key` + request body, as the Play Integrity `requestHash` and the App Attest `clientDataHash`. Needs agreeing with the relay before M2. |
 | Q2 | **Relay contract: allowed values of `location.source`** | The relay example shows only `"gps"`. The app needs at least `gps`, `network` and `last_known`. |
 | Q3 | **Relay contract: demo intake** | §12.3 needs a test department and intake code on the production relay, or a reviewer build pointed at staging. |
-| Q4 | One app per department, or one app for all? | v1 assumes one default department per build, with the QR / deep link override. A multi-department picker is a later decision. |
+| Q4 | One app per department, or one app for all? | v1 assumes one default department per build, with the QR / deep link override. A multi-department picker is a later decision. Core will not pick the nearest department for the relay (§15.1). |
 | Q5 | App name, bundle id, and branding | Working name only. Store listings need the final name and the department's consent to be named. |
 | Q6 | Languages beyond English for the pilot | Strings are ready for translation; the list of languages is not decided. |
+
+---
+
+## 15. Resgrid Core, for the relay
+
+Findings from Core as of 2026-11-19. The app does not call these. The relay does, and only with a department API key. A key is one department. It cannot name another department, and it cannot sit next to a bearer token or `X-Resgrid-SystemApiKey`.
+
+### 15.1 Departments and keys
+
+A department API key is a row on that department (`DepartmentApiKeys`). The secret is sent as `X-Resgrid-ApiKey`, shown once, and shaped `rgk_{prefix}_{secret}`. It acts as that department's managing user, and only on the v4 actions that declare a scope. `DepartmentId` on a call body is ignored. Limits in source config are 25 active keys per department and a maximum lifetime of 730 days.
+
+The system key (`X-Resgrid-SystemApiKey`, `SecurityConfig.SystemApiKey`) is the one credential that can pass `DepartmentId` and write a call in any department on that server. It is a host secret for the SMTP relay, with create, update, and delete on almost every resource, and it does not check that the department belongs to a given owner. The SOS relay must not hold it.
+
+One department, closest station, is the shape that matches the product. Stations are groups and a group has latitude and longitude. The relay holds that department's key with `calls.create` (and `calls.update` to attach files, §15.5), picks the nearest station itself, and sends `DispatchList` as `G:{groupId}`. There is no nearest-department API.
+
+Several departments means one key per department, stored on the relay, plus a location the relay keeps for each. The relay chooses and calls `SaveCall` with that key. Owning several departments does not produce one secret that covers all of them.
+
+There is no logged-in screen that creates a department. Registration (`/Account/Register`) creates a new user and a department that user owns, and only when `SystemBehaviorConfig.BillingApiBaseUrl` and `ApiConfig.BackendInternalApikey` are set. The form also requires reCAPTCHA (`WebConfig.RecaptchaPublicKey` and `RecaptchaPrivateKey`). Profile → Your Departments lists departments the signed-in user already belongs to, joins an existing one by id and code, and switches the active one. It does not create a department and it does not administer two departments at once.
+
+The service will attach a new department to an existing ordinary user. `CreateDepartmentAsync` sets `ManagingUserId` to the user id passed in. `AddUserToDepartmentAsync(departmentId, userId, isAdmin: true)` writes the admin membership. That helper also marks the new membership active and default without clearing those flags on the department the user is already in, so the screen must then call `SetActiveDepartmentForUserAsync`. Registration also starts the free plan with `CreateFreePlanPaymentAsync` when plan selection during signup is off. `CreateDepartmentAsync` does not.
+
+The four accounts in the initial migration are sample rows (`@yourcompany.local`), not a Resgrid back office.
+
+| Username | What it is |
+|---|---|
+| `TestAccount1` | Owner of department 1, "Resgrid System Department". Can sign in. |
+| `TestAccount2` | Ordinary member of department 1. Can sign in. |
+| `admin` | Owner of department 2, "Your Department". Can sign in. |
+| `Administrator` | Identity role `Admins` only. No department membership. The website refuses the login because a session requires a live department. The role's only product use is the feature-toggle API. Adding a department membership does not fix the website session, because the claims factory stops at the `Admins` role and never loads a department. |
+
+Department admin (`DepartmentMember.IsAdmin`, or the owner via `ManagingUserId`) is per department and can be granted to any member. A few actions require the owner specifically: deleting the department, the 2FA enforcement scope, MFA method switches, and Advanced Data Protection billing. The Identity role `Admins` is not that, and it is not a super admin over every department.
+
+### 15.2 Endpoints a department key can call
+
+Base path `api/v4/{Controller}/{Action}`. The allow-list is pinned in `Tests/Resgrid.Tests/Services/DepartmentApiKeysServiceTests.cs`. An action with no scope attribute rejects a key no matter which scopes it holds.
+
+Every body is the v4 envelope (`PageSize`, `Page`, `Timestamp`, `Version`, `Node`, `Environment`, `RequestId`, `Status`) plus `Data` or `Id`. `Status` is `success`, `not_found`, `created`, or `updated`. An empty list is HTTP 200 with `Status: "not_found"` and `PageSize: 0`, not an HTTP 404. A missing call from `GetCall` is the same. A real rejection is HTTP 401 or 400.
+
+| Scope | Method and path | Returns |
+|---|---|---|
+| `calls.read` | `GET Calls/GetActiveCalls` | Active calls (state `0`), each a `CallResultData`. |
+| `calls.read` | `GET Calls/GetCall?callId=` | One `CallResultData`. |
+| `calls.read` | `GET Calls/GetCalls?startDate=&endDate=` | Calls in a UTC range, same shape. Dates must be on or after 1753-01-01. |
+| `calls.read` | `GET Calls/GetPendingCalls` | Pending calls (state `8`). |
+| `calls.read` | `GET Calls/GetAllPendingScheduledCalls` | Scheduled calls that have not gone out. |
+| `calls.read` | `GET Calls/GetNewCallFieldPolicy` | The department's required and hidden new-call fields. |
+| `calls.create` | `POST Calls/SaveCall` | HTTP 201. Body is `{ Id, Status: "created" }`. `Id` is the new call id. The call number, who was paged, and file ids are not in the body. |
+| `calls.update` | `PUT Calls/EditCall` | HTTP 200, `{ Id, Status: "updated" }`. Active or pending calls only. |
+| `calls.update` | `PUT Calls/UpdateScheduledDispatchTime` | HTTP 200, `{ Id, Status: "updated" }`. Refused once the call has been dispatched. |
+| `calls.update` | `PUT Calls/DispatchCallNow` | HTTP 200, `{ Id, Status: "updated" }`. Sends a pending call, or a scheduled call that has not gone out. Fails when there is nobody to send it to. |
+| `calls.update` | `POST CallFiles/SaveCallFile` | HTTP 201, `{ Id }` (the attachment id). Active or pending calls only. `Data` is base64. `UserId` is ignored; the file is recorded under the department's managing user. See §15.5. |
+| `calls.close` | `PUT Calls/CloseCall` | HTTP 200, `{ Id, Status: "updated" }`. `Type` must be `1`–`7`. An active incident command blocks it. |
+| `reference.read` | `GET CallTypes/GetAllCallTypes` | The department's call types. A type string on `SaveCall` that is not in this list is dropped. |
+| `reference.read` | `GET CallPriorities/GetAllCallPriorites` | The path spells Priorites. Priorities are `0` Low, `1` Medium, `2` High, `3` Emergency. |
+| `reference.read` | `GET Groups/GetAllGroups` | Groups, including stations. A group has latitude and longitude. |
+| `reference.read` | `GET Dispatch/GetRolesForCallGrid` | Roles for a dispatch list. |
+| `reference.read` | `GET Dispatch/GetCallTemplates` | Call templates. |
+| `units.read` | `GET Units/GetAllUnits` | The department's units. |
+| `units.read` | `GET UnitStatus/GetAllUnitStatuses` | Each unit's latest status, destination, and coordinates. See §15.4. |
+
+`calls.read` also needs the resource policy `Call_View`. The key's scope grants that claim. `calls.create` grants `Call_Create` and does not grant view. A key that should both create and later read the call needs both scopes. `calls.update` grants `Call_Update` and, for `SaveCallFile`'s `Call_View` policy, `Call_View`; its scope still keeps it off the `calls.read` endpoints.
+
+### 15.3 Creating the SOS call
+
+`SaveCall` with `IsPending: true` is the SOS. Nobody is notified, `DispatchOn` is ignored, and the call stays out of the field apps until a dispatcher sends it with `DispatchCallNow` or from Pending Calls. That is the app's "Received" state. "Help has been dispatched" starts when the call becomes state `0`.
+
+Required body fields are `Priority`, `Name`, and `Nature`. For a public SOS the relay should also send `ContactName`, `ContactInfo` (callback phone), `Note`, `Address`, and `Geolocation` as `lat,lon`. A client that omits `ProtocolIds`, `LinkedCallId`, or `IndoorMapZoneId` (null, not empty) is not blocked by a department rule it has no picker for. `CallFormData` is accepted and discarded.
+
+`DispatchList` is `P:{userId}`, `U:{unitId}`, `G:{groupId}`, `R:{roleId}`, joined by `|`. On a pending call, leave it empty for no proposed recipients. `0` means everyone. On an immediate call (not pending), a blank list from a department key pages the whole department. The system key refuses that. The SOS relay should send `IsPending: true`, or an explicit group, and should not send `0`.
+
+The reporting user stored on the call is the department's managing user. `calls.create` still runs `CanUserCreateCallAsync` as that user. If Create Call is taken away from department admins, the key cannot create calls. `calls.close` still runs `CanUserCloseCallAsync` as the owner, including group scope, so a key can be allowed to edit a call and then forbidden to close it.
+
+`Idempotency-Key` on `SaveCall` is honored for the email-intake receipt path. A repeat of a completed key returns the original call id. An in-flight duplicate is HTTP 409.
+
+Protected departments come back with the literal `REDACTED` and a `ProtectedReason`. A key has no MFA grant, so sensitive fields stay redacted on read. Writes go through the encrypt-only lane and do not need a grant.
+
+### 15.4 Tracking state, and unit locations
+
+Poll `GetCall` with `calls.read`. Map `CallResultData.State` as follows.
+
+| `State` | Name | App status (§6.5) |
+|---|---|---|
+| `8` | Pending. Saved, not sent. | `received` |
+| `0` | Active. Dispatched or otherwise live. `DispatchedOn` is set once it has been sent. | `dispatched` |
+| `1` | Closed | `closed` |
+| `2` | Cancelled | `closed` |
+| `3` | Unfounded | `closed` |
+| `4` | Founded | `closed` |
+| `5` | Minor | `closed` |
+| `6` | Transferred | `closed` |
+| `7` | False alarm | `closed` |
+
+`GetActiveCalls` is only state `0`. `GetPendingCalls` is only state `8`. After a close, the call leaves the active list and `GetCall` shows `1`–`7`. The call's own `Latitude`, `Longitude`, `Address`, and `Geolocation` are the incident, not the units.
+
+The call payload does not include the dispatch list, so the relay cannot read back who was paged. It also does not include notes or files, only `NotesCount`, `AudioCount`, `ImgagesCount`, and `FileCount`.
+
+A unit is currently destined to the call when `GetAllUnitStatuses` returns `DestinationType` `2` (call) and `DestinationId` equal to the call id. `1` is a station, `3` is a POI. `Latitude` and `Longitude` are the latest GPS fix when one exists, otherwise the coordinates stored on the status. That destination is what the crew set from the unit app. Being on the original dispatch list does not set it, and the next status the crew picks clears it.
+
+This is a snapshot. Poll again for the next fix. There is no track. `GetLatestUnitLocation`, `SetUnitLocation`, and the unit-tracker ingress have no department-key scope, so the relay cannot call them. The live hub (`/eventingHub`) accepts a user bearer token only and pushes `callsUpdated` or `unitStatusUpdated` as an id. `X-Resgrid-ApiKey` cannot connect to it.
+
+Coordinates are still checked as the managing user. A department admin normally sees them. If that owner is not allowed to see a unit, the coordinates are omitted for the key too.
+
+`GetCallLocationHistory` is earlier calls at the same address, not a GPS trail, and a key cannot call it.
+
+v1 of the app does not show unit positions (§2). The relay can still poll them for a later status screen. Personnel locations are a different API and are not open to the key.
+
+### 15.5 Endpoints a key cannot call
+
+Attaching a file is open: `POST CallFiles/SaveCallFile` takes `calls.update` (§15.2), so the SOS voice recording can go up with the relay's key. The change in Core reused that scope, not a new one, so it stays out of `DepartmentApiKeyScopes.All`, the API Keys checkbox dictionary, and the ten `Security.*.resx` files that conflict on every upstream sync. `calls.update` now also grants `Call_View`, which `SaveCallFile` keeps as its policy so signed-in members who can attach today still can. A department key skips the Add Call Data check (it acts for its own department, which the key pins), writes protected fields as an unattended writer instead of asking for an MFA grant, and is recorded as the department's managing user whatever `UserId` it posts. The cost: a `calls.update` key can attach a file to any active or pending call in its department, as it can already edit or dispatch one.
+
+The rest of this section is still closed.
+
+| Wanted | Blocked because |
+|---|---|
+| List files (`GET CallFiles/GetFilesForCall`) | No scope. Opening it would be a `calls.read` decision. |
+| Notes (`GET CallNotes/GetCallNotes`, `POST CallNotes/SaveCallNote`) | No key scope. `Call_View`, then Add Call Data as the acting user; opening it would follow the `SaveCallFile` change above. |
+| Delete a call, escalate an alarm, call history, site info, extra data | No scope. |
+| Stream locations | No key-accessible stream. Poll §15.4. |
