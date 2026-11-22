@@ -1,24 +1,25 @@
 # sos-relay
 
-The relay is the only server the public SOS mobile app talks to. It checks that a request comes from a genuine app install, applies abuse limits, and creates a **pending call** in one Resgrid (Core) department, then reports a simple status back to the app: `queued`, `received`, `dispatched`, `closed` or `failed`. It holds the department's Resgrid API key; the app holds no secret. One Node 22 / Fastify 5 / TypeScript process, with Postgres as its only stateful dependency.
+The relay is the only server the public SOS mobile app talks to. Signed-in users send a **one-tap SOS**; the relay applies abuse limits, creates a **pending call** in one Resgrid (Core) department, accepts an optional **voice recording**, and reports call and unit status back to the app: `queued`, `received`, `dispatched`, `closed` or `failed`, plus a live snapshot (status, recording, units while watching). It holds the department's Resgrid API key; the app holds no secret. One Node 22 / Fastify 5 / TypeScript process, with Postgres as its only stateful dependency.
 
 | Read this | For |
 |---|---|
 | [`sos-relay-PRD.md`](sos-relay-PRD.md) | What the relay does, the public API, delivery rules, limits, deployment, acceptance criteria, open risks. The source of truth for behaviour. |
 | [`integration.md`](integration.md) | The contract with Resgrid Core: endpoints, auth, errors, the Core-side setup (section 10) and the live test checklist (section 11). Wins over the PRD on anything about Core. |
-| [`docs/app-api-contract.md`](docs/app-api-contract.md) | **For the app team:** every endpoint the app uses, what to send, every answer and what to do with it, retries, limits. The OpenAPI document is [`docs/openapi.json`](docs/openapi.json) (served at `/v1/openapi.json`; regenerate with `npm run openapi`). |
-| [`docs/attestation-contract.md`](docs/attestation-contract.md) | What the app must send so the relay can verify an install (Play Integrity, App Attest). |
-| [`docs/auth-contract.md`](docs/auth-contract.md) | **For the demo app:** sign-up, sessions, `GET /v1/me`, with their own error codes. Built behind `AUTH_ENABLED`; see [Auth (demo app)](#auth-demo-app). Plan: [`docs/auth-implementation-plan.md`](docs/auth-implementation-plan.md). |
+| [`docs/app-api-contract.md`](docs/app-api-contract.md) | **For the app team:** every endpoint the app uses, what to send, every answer and what to do with it, retries, limits, live WebSocket. The OpenAPI document is [`docs/openapi.json`](docs/openapi.json) (served at `/v1/openapi.json`; regenerate with `npm run openapi`). |
+| [`docs/live-sos-plan.md`](docs/live-sos-plan.md) | Design for the live SOS pilot: phone sign-in, one-tap SOS, recordings, live status, data model. |
+| [`docs/live-sos-seams.md`](docs/live-sos-seams.md) | Module boundaries and contracts between the live-SOS slices. |
+| [`docs/auth-contract.md`](docs/auth-contract.md) | **For the app:** sign-up, sign-in, sessions, `GET /v1/me`, with their own error codes. Auth is always on. Plan: [`docs/auth-implementation-plan.md`](docs/auth-implementation-plan.md). |
 
-Also: [`sos-app-PRD.md`](sos-app-PRD.md) (the app), [`mock-core/README.md`](mock-core/README.md) (the mock Core and its `/__control` endpoints), [`.env.example`](.env.example) (every setting).
+Also: [`sos-app-PRD.md`](sos-app-PRD.md) (the app), [`mock-core/README.md`](mock-core/README.md) (the mock Core and its `/__control` endpoints), [`.env.example`](.env.example) (every setting). [`docs/attestation-contract.md`](docs/attestation-contract.md) is **retired** (device attestation removed in the pilot).
 
 ## Status: read this before relying on anything below
 
-Everything here is tested against the in-repo mock Core only. **Nothing has been run against a real Resgrid Core, and no real device attestation (Play Integrity, App Attest) has been tested.** See [Before go-live](#before-go-live).
+Everything here is tested against the in-repo mock Core only. **Nothing has been run against a real Resgrid Core.** See [Before go-live](#before-go-live).
 
 ## Quick start (Docker Compose)
 
-Needs Docker with Compose. This starts Postgres, the mock Core, a one-shot migration, and the relay in `permissive` attestation mode, with the example intakes from `intakes.example.json`.
+Needs Docker with Compose. This starts Postgres, the mock Core, a one-shot migration, and the relay with the example intakes from `intakes.example.json`.
 
 ```sh
 docker compose up --build
@@ -34,36 +35,50 @@ docker compose up --build
 
 ### Walk-through with curl
 
-Needs `curl` and `jq`. Each step uses the request shapes of the route schemas in `src/routes/` and `src/sos/schemas.ts`.
+Needs `curl` and `jq`. On a **clean** database each run needs a **fresh E.164 phone** on sign-up (or `docker compose down -v` first). Each step uses the route schemas in `src/routes/`, `src/auth/routes/` and `src/sos/schemas.ts`.
 
 ```sh
 RELAY=http://localhost:3000
 MOCK=http://localhost:4010
 CODE=EXAMPLE-FD-01
+PHONE=+234802$(printf '%07d' $((RANDOM * RANDOM % 10000000)))
+CAPTURED=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-# 1. The intake: department, natures, whether it can take an SOS right now.
+# 1. The intake: department, natures (display only), whether it can take an SOS right now.
 curl -s $RELAY/v1/intake/$CODE | jq
 
-# 2. A single-use nonce (5 minute life).
-NONCE=$(curl -s $RELAY/v1/devices/nonce | jq -r .nonce)
-
-# 3. Register a device. The relay is in permissive mode, so no attestation is sent.
-TOKEN=$(curl -s -X POST $RELAY/v1/devices/register \
+# 2. Sign up (phone + password). Keep the access token for every later step.
+SIGNUP=$(curl -s -X POST $RELAY/v1/auth/signup \
   -H 'content-type: application/json' \
-  -d "{\"platform\":\"android\",\"nonce\":\"$NONCE\"}" | jq -r .deviceToken)
+  -H "idempotency-key: $(uuidgen | tr 'A-Z' 'a-z')" \
+  -d "{\"fullName\":\"Walk-through Caller\",\"phone\":\"$PHONE\",\"password\":\"correct horse battery staple\",\"device\":{\"platform\":\"android\",\"appVersion\":\"0.3.0\",\"installId\":\"$(uuidgen | tr 'A-Z' 'a-z')\"}}")
+echo "$SIGNUP" | jq
+TOKEN=$(echo "$SIGNUP" | jq -r .session.accessToken)
 
-# 4. Send an SOS. The Idempotency-Key must be a UUID; reuse it on every retry of this SOS.
+# 3. One-tap SOS: intakeCode and location (or address). Name and callback come from the account.
+SOS_KEY=$(uuidgen | tr 'A-Z' 'a-z')
 SOS=$(curl -s -X POST $RELAY/v1/sos \
   -H "authorization: Bearer $TOKEN" \
-  -H "idempotency-key: $(uuidgen | tr 'A-Z' 'a-z')" \
+  -H "idempotency-key: $SOS_KEY" \
   -H 'content-type: application/json' \
-  -d '{"intakeCode":"EXAMPLE-FD-01","nature":"medical","phone":"+2348012345678","address":"12 Marina Road","name":"Test caller","details":"Walk-through test"}')
+  -d "{\"intakeCode\":\"$CODE\",\"location\":{\"lat\":6.524417,\"lon\":3.379206,\"accuracyM\":12,\"capturedAt\":\"$CAPTURED\",\"source\":\"gps\"}}")
 echo "$SOS" | jq
 RECEIPT=$(echo "$SOS" | jq -r .receiptId)
-STATUS_TOKEN=$(echo "$SOS" | jq -r .statusToken)
 
-# 5. Its status (database only; never calls Core). Do not poll faster than once per 5 s.
-curl -s $RELAY/v1/sos/$RECEIPT/status -H "x-status-token: $STATUS_TOKEN" | jq
+# 4. Optional voice recording (.m4a). With ffmpeg:
+# ffmpeg -y -f lavfi -i anullsrc=r=16000:cl=mono -t 1 -c:a aac -b:a 32k /tmp/sample.m4a
+# Without ffmpeg, a minimal MP4 container the relay accepts (see test/recordings/fixtures.ts):
+python3 -c "import struct; open('/tmp/sample.m4a','wb').write(struct.pack('>I',24)+b'ftypM4A '+b'\x00'*12+b'walk-through')"
+REC_KEY=$(uuidgen | tr 'A-Z' 'a-z')
+curl -s -X POST "$RELAY/v1/sos/$RECEIPT/recording" \
+  -H "authorization: Bearer $TOKEN" \
+  -H "idempotency-key: $REC_KEY" \
+  -H 'content-type: audio/mp4' \
+  -H 'x-recording-duration-ms: 1000' \
+  --data-binary @/tmp/sample.m4a | jq
+
+# 5. Live snapshot (database only; same shape as the WebSocket). Do not poll faster than once per 5 s.
+curl -s "$RELAY/v1/sos/$RECEIPT/status" -H "authorization: Bearer $TOKEN" | jq
 
 # 6. What the relay created in the mock Core: one pending call (InitialState 8).
 curl -s $MOCK/__control/calls | jq '.[0] | {CallId, State, InitialState, Name, ExternalId, ReferenceId}'
@@ -72,16 +87,23 @@ curl -s $MOCK/__control/calls | jq '.[0] | {CallId, State, InitialState, Name, E
 CALL_ID=$(curl -s $MOCK/__control/calls | jq -r '.[0].CallId')
 curl -s -X POST $MOCK/__control/calls/$CALL_ID/state -H 'content-type: application/json' -d '{"state":0}'
 
-# 8. The status poller reads Core every 15 s while a call is `received`, so wait, then ask again.
+# 8. Optional: script units heading to this call for GetAllUnitStatuses (see mock-core/README.md).
+curl -s -X PUT $MOCK/__control/unit-statuses -H 'content-type: application/json' \
+  -d "[{\"UnitId\":214,\"Type\":\"Engine\",\"State\":\"En Route\",\"DestinationType\":2,\"DestinationId\":$CALL_ID,\"Latitude\":6.524,\"Longitude\":3.379}]"
+
+# 9. The status poller reads Core every 15 s while a call is `received`, then every 60 s while `dispatched`
+# (faster while the app watches on GET /v1/live; see docs/app-api-contract.md).
 sleep 20
-curl -s $RELAY/v1/sos/$RECEIPT/status -H "x-status-token: $STATUS_TOKEN" | jq
+curl -s "$RELAY/v1/sos/$RECEIPT/status" -H "authorization: Bearer $TOKEN" | jq
+
+# 10. Recording attach uses the same worker loop as delivery; give it a few seconds, then check Core files.
+sleep 5
+curl -s "$MOCK/__control/files?callId=$CALL_ID" | jq
 ```
 
-Expected: step 4 returns HTTP 201 with `"status": "received"`; step 6 shows one call with `InitialState` 8; step 8 shows `"status": "dispatched"`. A device may have one open SOS at a time, so a second step 4 with the same token returns 409 until the first call is closed: dispatch it as in step 7 with `{"state":1}` and wait for the status to read `closed`, or register another device.
+Expected: step 3 returns HTTP 201 with `"status": "received"` and **no** `statusToken`; step 6 shows one call with `InitialState` 8; step 9 shows `"status": "dispatched"` and a snapshot with `"type": "state"`, `version`, and `recording.status`. A **user** may have one open SOS at a time (`queued`, `received` or `dispatched`), so a second step 3 with a new key returns 409 until the first is closed: dispatch then close it in step 7 with `{"state":1}` and wait for `"status": "closed"`, or sign up again with a new phone. `units` in the snapshot are filled only while the caller is **watching** (WebSocket subscribe and ping); over HTTP-only curl they stay empty even after step 8.
 
-To try the demo intake, use `"intakeCode":"DEMO-INTAKE-01"` in step 4: it answers `received` at once and never touches the mock Core, then moves to `dispatched` after 30 s and `closed` after 90 s.
-
-**Verified** on 2026-11-17 from a clean `docker compose up --build` (host ports remapped, because 3000 and 3001 were taken on that machine): steps 1 to 8 gave the expected results, a repeat of step 4 with the same key returned the same receipt without a second call in the mock, and the demo intake moved to `dispatched` without reaching the mock Core.
+To try the demo intake, use `"intakeCode":"DEMO-INTAKE-01"` in step 3: it answers `received` at once and never touches the mock Core, then moves to `dispatched` after 30 s and `closed` after 90 s.
 
 Stop with `docker compose down` (add `-v` to drop the database).
 
@@ -108,7 +130,7 @@ npm run build && npm start   # compiled build, as in the Docker image
 TEST_DATABASE_URL=postgres://user:pass@localhost:5432/relay_test npm test
 ```
 
-`test/e2e/` wires the real public app, the real Core client, the mock Core and Postgres together; only attestation and the clock are fake. `npx vitest run test/e2e` runs just those.
+`test/e2e/` wires the real public app, the real Core client, the mock Core and Postgres together; only the clock is fake. `npx vitest run test/e2e` runs just those.
 
 ## Configuration
 
@@ -121,23 +143,27 @@ TEST_DATABASE_URL=postgres://user:pass@localhost:5432/relay_test npm test
 | `RESGRID_CALL_TYPE_NAME`, `RESGRID_PRIORITY_ID` | Must match Core exactly (the type name is case-sensitive). A mismatch makes the intake unavailable. |
 | `INTAKES_JSON` or `INTAKES_FILE` | The intakes (see `intakes.example.json`). `INTAKES_JSON` wins when both are set. |
 | `PHONE_HASH_SECRET`, `ADMIN_TOKEN` | At least 32 bytes each (`openssl rand -hex 32`). Changing the first orphans existing phone strikes and blocks. |
-| `AUTH_TOKEN_SECRET` | Required, at least 32 bytes (`openssl rand -hex 32`). Auth is always on: the SOS routes take the signed-in user's access token (`AUTH_ENABLED` is gone). It signs access tokens and derives refresh tokens: changing it signs every user out. |
+| `AUTH_TOKEN_SECRET` | Required, at least 32 bytes (`openssl rand -hex 32`). Auth is always on: the SOS routes need the signed-in user's access token. It signs access tokens and derives refresh tokens and live unit keys: changing it signs every user out. |
 | `SOS_NATURE_TEXT` | The Nature of every SOS call in Core (default `SOS – caller recording to follow`), at most 200 characters. The caller sends no nature: the recording carries what happened. |
 | `RECORDINGS_PER_SOS` | Voice recordings one SOS may hold (default `1`, at least 1). A further upload is refused with 409 `recording_limit`. |
+| `LIMIT_SOS_PER_USER_PER_24H`, `LIMIT_SOS_PER_PHONE_PER_24H`, `LIMIT_SOS_PER_IP_PER_HOUR` | Abuse limits (defaults 3, 3, 10). One open SOS per user (demo and real counted separately). See [`docs/app-api-contract.md`](docs/app-api-contract.md) §9. |
 | `CLIENT_IP_HEADER` | Header holding the caller's address. Unset locally. On Railway: `x-real-ip`. Wrong value means every caller shares one IP and the per-IP limits misfire. |
 | `ALERT_WEBHOOK_URL` | Where alerts go. Unset means alerts are only logged. |
 | `RUN_JOBS` | `false` runs the HTTP servers only (jobs elsewhere). |
 | `UNIT_POLL_INTERVAL_S` | Seconds between `GetAllUnitStatuses` calls (default 10, at least 1). The relay reads units only while a caller is watching a `dispatched` SOS; one call covers every SOS in the department. |
 
-## Auth (demo app)
+## Auth
 
-The demo app signs users up and keeps them signed in. It sends no SOS. The endpoints are `POST /v1/auth/signup`, `POST /v1/auth/signin`, `POST /v1/auth/refresh`, `POST /v1/auth/signout` and `GET /v1/me`, specified in [`docs/auth-contract.md`](docs/auth-contract.md) (the contract; its section 7 is the acceptance checklist, walked by `test/e2e/auth.e2e.test.ts`) and built as in [`docs/auth-implementation-plan.md`](docs/auth-implementation-plan.md). They are off unless `AUTH_ENABLED=true`, and need `AUTH_TOKEN_SECRET`. Sign-in returns a new session for an existing account: 20 attempts per hour per client IP and 10 per hour per email address.
+Phone sign-in is always on. The same **access token** goes on `POST /v1/sos`, status, recording, and the live WebSocket (`Authorization: Bearer`). Endpoints: `POST /v1/auth/signup`, `POST /v1/auth/signin`, `POST /v1/auth/refresh`, `POST /v1/auth/signout` and `GET /v1/me`, specified in [`docs/auth-contract.md`](docs/auth-contract.md) (section 7 is the acceptance checklist, walked by `test/e2e/auth.e2e.test.ts`). Sign-in: 20 attempts per hour per client IP and **10 per hour per phone** (E.164, counted by keyed hash).
 
-- **Separate from SOS.** An access token (15 minutes) is never accepted on the SOS routes, and a device token is never accepted on the auth routes. An account and a registered device are not linked.
-- **Own error codes.** The auth endpoints answer with the codes in the auth contract; the SOS routes keep the ones in the app API contract.
-- **Migration.** `migrations/004_auth.sql` and `migrations/005_signin_attempts.sql` run with the others, whether or not auth is on.
-- **OpenAPI.** `docs/openapi.json` documents the auth routes (tag `auth`, security scheme `accessToken`, next to `deviceToken`). A relay with `AUTH_ENABLED=false` serves the same document without them.
-- **Data retention.** Accounts are **not** purged: every demo account is deleted by an operator before a public release (contract section 8). The purge job deletes refresh tokens 7 days after they expire or are revoked, sign-up idempotency records and phone attempt records 24 hours after they are created, and sign-in attempt records 1 hour after they are created. SOS data keeps its 30 days.
+- **One credential on the emergency path.** The access token (15 minutes) is what SOS, status, recording and live status use. There is no device token or `X-Status-Token`.
+- **Own error codes.** Auth endpoints use the codes in the auth contract; SOS routes use [`docs/app-api-contract.md`](docs/app-api-contract.md).
+- **OpenAPI.** `docs/openapi.json` documents auth and SOS under the `accessToken` security scheme.
+- **Data retention.** Accounts are **not** purged: every pilot account is deleted by an operator before a public release (contract section 8). The purge job deletes refresh tokens 7 days after they expire or are revoked, sign-up idempotency records and phone attempt records 24 hours after they are created, and sign-in attempt records 1 hour after they are created. SOS data keeps its 30 days.
+
+## Live status (WebSocket)
+
+[`docs/app-api-contract.md`](docs/app-api-contract.md) §5 defines **`GET /v1/live`**: a WebSocket that pushes versioned snapshots while the caller subscribes and pings. Today, **`GET /v1/sos/{receiptId}/status`** already returns that snapshot over HTTP (same JSON, including `"type": "state"`); it does not mark the SOS as watched, so unit polling stays on the slow schedule until the socket lands.
 
 ## Deploying on Railway
 
@@ -170,7 +196,7 @@ From [`integration.md` section 10](integration.md#10-core-side-setup-configurati
 
 1. Create a call type named exactly as `RESGRID_CALL_TYPE_NAME` (for example `Public SOS`).
 2. Pick the call priority for SOS calls; note its numeric id (`RESGRID_PRIORITY_ID`). It is also visible through `GetAllCallPriorites`.
-3. Security, API Keys: create a key with scopes `calls.create`, `calls.read`, `reference.read` only. Set the IP allowlist to the relay's egress IP. Set an expiry of 730 days or less and record the date as `RESGRID_API_KEY_EXPIRES_ON`.
+3. Security, API Keys: create a key with scopes **`calls.create`, `calls.read`, `calls.update`, `units.read`, `reference.read`** only. Set the IP allowlist to the relay's egress IP. Set an expiry of 730 days or less and record the date as `RESGRID_API_KEY_EXPIRES_ON`.
 4. Review the new-call field policy ([integration.md section 7](integration.md#7-required-field-policy-get-callsgetnewcallfieldpolicy)). If it requires `what3words`, `incidentId` or `destinationPoi`, the relay cannot meet it and the intake stays unavailable.
 5. Confirm the department's managing user is allowed to create calls (true by default for a department admin).
 
@@ -196,10 +222,12 @@ curl -s -X POST $A/admin/v1/delivery/resume -H "$H" | jq
 # One submission by its reference (no personal data).
 curl -s $A/admin/v1/submissions/SOS-7KQ2 -H "$H" | jq
 
-# Blocks: list, add (by device id or phone number), remove.
+# Blocks: list, add (by user id or phone number), remove.
 curl -s $A/admin/v1/blocks -H "$H" | jq
 curl -s -X POST $A/admin/v1/blocks -H "$H" -H 'content-type: application/json' \
   -d '{"phone":"+2348012345678","reason":"repeat hoax","days":30}' | jq
+curl -s -X POST $A/admin/v1/blocks -H "$H" -H 'content-type: application/json' \
+  -d '{"userId":"0b6f3a4e-8d2c-4f1a-9e7b-5c3d2a1f0e9d","reason":"repeat hoax","days":30}' | jq
 curl -s -X DELETE $A/admin/v1/blocks/<block id> -H "$H" | jq
 
 # Erase submissions by phone number or by reference.
@@ -209,7 +237,7 @@ curl -s -X POST $A/admin/v1/erasure -H "$H" -H 'content-type: application/json' 
 curl -s $A/metrics -H "$H"
 ```
 
-A body with `{"deviceId": "dev_..."}` instead of `phone` blocks a device. Resume returns 409 `core_auth_failed` if Core still refuses the key, and 503 `core_unreachable` if Core cannot be reached.
+Resume returns 409 `core_auth_failed` if Core still refuses the key, and 503 `core_unreachable` if Core cannot be reached.
 
 ### Alerts
 
@@ -217,23 +245,25 @@ One outbound webhook (`ALERT_WEBHOOK_URL`); body `{severity, code, text, referen
 
 | Code | Severity | Meaning | What to do |
 |---|---|---|---|
-| `delivery_paused` | critical | Core answered 401 or 403 to `SaveCall` (or an operator paused). No Core calls are made and new SOS get 503. If the 401/403 came during a caller's own request, that caller was answered 503 too and the SOS was marked `failed` (never delivered, even after resume; `GET /admin/v1/submissions/<reference>` shows `failure_reason: not sent: ...`). SOS already answered 202 `queued` wait, and fail at 30 minutes unless delivery resumes first. Repeats every 15 minutes while paused. | Find out why Core refuses the key: expired, revoked, wrong environment, relay egress IP not in the key's allowlist, or the key lacks `calls.create` (403). Fix the key (a new key means updating `RESGRID_API_KEY` and redeploying). **Then** `POST /admin/v1/delivery/resume`. Do not resume before the key is fixed: repeated unrecognised keys can trip Core's lockout. |
+| `delivery_paused` | critical | Core answered 401 or 403 to `SaveCall` or `SaveCallFile` (or an operator paused). No Core calls are made and new SOS get 503. If the 401/403 came during a caller's own request, that caller was answered 503 too and the SOS was marked `failed` (never delivered, even after resume; `GET /admin/v1/submissions/<reference>` shows `failure_reason: not sent: ...`). SOS already answered 202 `queued` wait, and fail at 30 minutes unless delivery resumes first. Repeats every 15 minutes while paused. | Find out why Core refuses the key: expired, revoked, wrong environment, relay egress IP not in the key's allowlist, or the key lacks `calls.create` / `calls.update` (403). Fix the key (a new key means updating `RESGRID_API_KEY` and redeploying). **Then** `POST /admin/v1/delivery/resume`. Do not resume before the key is fixed: repeated unrecognised keys can trip Core's lockout. |
 | `field_policy_unmeetable` | critical | Core's field policy requires `what3words`, `incidentId` or `destinationPoi`. The intake is unavailable. | Change the field policy in Resgrid. The next hourly check clears it. |
 | `core_reference_mismatch` | critical | The configured call type name or priority id was not found in Core. The intake is unavailable. | Fix `RESGRID_CALL_TYPE_NAME` / `RESGRID_PRIORITY_ID` or the data in Resgrid. |
 | `intake_breaker_tripped` | critical | More than 30 SOS in 10 minutes (defaults): the whole intake refuses with 503. | Check for a flood or a hoax campaign; see the blocks API. It clears as the window passes. |
 | `submission_failed` | high | A submission ended `failed`, for example it was not delivered within 30 minutes. The caller was told, and should have phoned. | Look it up with `GET /admin/v1/submissions/<reference>`; find why Core was unreachable. |
 | `core_rejected_call` | high | Core rejected a `SaveCall` with a 4xx; it is not retried. A message like `Required call fields are missing: ...` is a field-policy problem. | Fix the Core configuration or the relay mapping; this is a configuration problem or a relay bug. |
+| `recording_rejected` | high | Core rejected `SaveCallFile` for a recording; the audio was dropped. | Check the call is still active, the key has `calls.update`, and Core's file limits. |
+| `recording_dropped` | warning | A recording could not be attached after repeated retries and was dropped. | Look up the SOS reference; Core may have been down or the call closed first. |
 | `resgrid_key_expiring` | warning | The key expires within 30 days, and again within 7. | Issue a new key, update the variable and the expiry date, redeploy. |
 | `unknown_call_state` | warning | Core returned a call `State` the relay does not know; the status is left unchanged. | Check which state it is; it may need adding to the mapping. |
 | `queue_backlog` | warning | Queue depth or oldest queued age is over the threshold (`QUEUE_DEPTH_WARN`, `OLDEST_QUEUED_WARN_S`). | Check Core health; see `delivery_paused`. |
-| `automatic_block` | warning | A device was blocked after repeated unfounded or false-alarm closures, or such a block was lifted because a closure was reversed in Core. | Review it; unblock through the blocks API if it was a real caller (PRD risk R5). |
-| `phone_hoax_threshold` | warning | A phone number reached `HOAX_STRIKES_TO_BLOCK` unfounded or false-alarm closures. It was **not** blocked: phone numbers are unverified, so a hoaxer could give a stranger's number. The alert names the SOS reference, never the number. | Look the reference up in Resgrid, review the calls, and block the number through the blocks API (`{"phone": "+..."}`) only if you judge it warranted (PRD section 9.2). |
+| `automatic_block` | warning | A **user** was blocked after repeated unfounded or false-alarm closures, or such a block was lifted because a closure was reversed in Core. | Review it; unblock through the blocks API if it was a real caller (PRD risk R5). |
+| `phone_hoax_threshold` | warning | A phone number reached `HOAX_STRIKES_TO_BLOCK` unfounded or false-alarm closures. It was **not** blocked: phone numbers are unverified, so a hoaxer could use another account. The alert names the SOS reference, never the number. | Look the reference up in Resgrid, review the calls, and block the user or number through the blocks API only if warranted (PRD section 9.2). |
 
 ### Metrics
 
-`GET /metrics` on the admin port (Prometheus text format), behind the admin token. Counters: submissions by outcome, Core calls by endpoint and result, attestation results, rate-limit refusals by rule, and with auth on `auth_signups_total` (created, replay), `auth_signins_total` (success, invalid_credentials, rate_limited), `auth_refreshes_total` (rotated, grace, reuse_detected, revoked, invalid, rate_limited) and `auth_signouts_total` (revoked, noop). Histograms: Core latency and `POST /v1/sos` latency. Gauges: `sos_queue_depth`, `sos_oldest_queued_age_seconds`, `sos_delivery_paused`. Metrics and logs carry no phone number, name, coordinate or free text.
+`GET /metrics` on the admin port (Prometheus text format), behind the admin token. Counters: submissions by outcome, Core calls by endpoint and result, rate-limit refusals by rule, `auth_signups_total` (created, replay), `auth_signins_total` (success, invalid_credentials, rate_limited), `auth_refreshes_total` (rotated, grace, reuse_detected, revoked, invalid, rate_limited), `auth_signouts_total` (revoked, noop), `recordings_uploaded_total` (accepted, replay, recording_limit, sos_closed, key_reused), `recordings_attached_total`, and `recordings_dropped_total` by reason (`call_closed`, `sos_closed`, `sos_failed`, `attempts_exhausted`, `core_rejected`, `window_ended`, `no_bytes`). Histograms: Core latency and `POST /v1/sos` latency. Gauges: `sos_queue_depth`, `sos_oldest_queued_age_seconds`, `sos_delivery_paused`. Metrics and logs carry no phone number, name, coordinate, recording bytes or free text.
 
-Recordings: `recordings_uploaded_total` (accepted, replay, recording_limit, sos_closed, key_reused), `recordings_attached_total` and `recordings_dropped_total` by reason (call_closed, sos_closed, sos_failed, attempts_exhausted, core_rejected, window_ended, no_bytes). The attach worker (`recordings` job) sends each stored recording to Core with `SaveCallFile` once the call exists; a Core 401/403 pauses delivery like SaveCall does. The audio is never logged.
+The attach worker (`recordings` job) sends each stored recording to Core with `SaveCallFile` once the call exists; a Core 401/403 on attach pauses delivery like `SaveCall` does.
 
 ## Before go-live
 
@@ -246,20 +276,20 @@ None of this is done. Do not point a public app at this relay until each item is
    npx tsx scripts/live-checklist.ts --yes-create-test-calls            # interactive: asks you to dispatch, close, delete, paste throwaway keys
    npx tsx scripts/live-checklist.ts --yes-create-test-calls --no-interactive   # skips every item that needs a human
    ```
-   Items that need a human or another key (no notification sent, a key without `calls.create`, an address outside the IP allowlist, revoking a key, changing the field policy, dispatching and closing a call) are printed as manual steps; a `--no-interactive` run leaves them **unproven**. It also records the two measurements the PRD wants: what `GetCall` returns for a deleted call, and the longest `Name`, `Nature`, `Address` and `Note` Core accepts. It has been run only against the mock Core.
-2. **Real-device attestation.** Verifiers are tested against fixtures only. Test registration and SOS with real Play Integrity tokens (Play internal testing track) and real App Attest (TestFlight), in `enforce` mode, using [`docs/attestation-contract.md`](docs/attestation-contract.md). Needs the app.
-3. **Acceptance criteria.** Walk through [PRD section 15.3](sos-relay-PRD.md#153-acceptance-criteria) (AC1 to AC16) in the deployed environment, including killing the process and restarting, and a Core 401.
+   Items that need a human or another key (no notification sent, a key without `calls.create`, an address outside the IP allowlist, revoking a key, changing the field policy, dispatching and closing a call) are printed as manual steps; a `--no-interactive` run leaves them **unproven**. It also records the two measurements the PRD wants: what `GetCall` returns for a deleted call, and the longest `Name`, `Nature`, `Address` and `Note` Core accepts, and exercises `SaveCallFile` and `GetAllUnitStatuses`. It has been run only against the mock Core.
+2. **Acceptance criteria.** Walk through [PRD section 15.3](sos-relay-PRD.md#153-acceptance-criteria) (AC1 to AC16) in the deployed environment, including killing the process and restarting, and a Core 401.
+3. **Before a public release** ([`docs/live-sos-plan.md`](docs/live-sos-plan.md) §9): SMS phone verification before a Core-bound SOS; app attestation (or equivalent) bound to the user session on store builds; run **two relay instances** against one database and verify jobs and live fan-out; re-check decision **D11** (live unit positions to the public) with the department; Core backlog (key-readable dispatch list for a call, narrow endpoint for caller movement without full `EditCall` replace).
 
 ### Open risks, not yet verified
 
-From [PRD section 17](sos-relay-PRD.md#17-risks-and-open-items):
+From [PRD section 17](sos-relay-PRD.md#17-risks-and-open-items), updated for the live pilot where noted:
 
-- **R1 Live attestation is unproven.** Fixtures only.
 - **R2 Not run against a real Core.** Everything passes against the mock, which was written from `integration.md`, not from a real instance. Where the two differ, Core wins.
 - **R3 Core text length limits are unknown.** The live checklist measures them.
 - **R4 Deleted calls.** What `GetCall` returns for a deleted call is unverified. The relay maps both plausible answers to a sensible status.
-- **R5 Automatic device blocks can lock out a real caller.** Two unfounded closures block a device for 30 days; tune `HOAX_STRIKES_TO_BLOCK` (0 = no automatic blocks and no strike alerts) and review during the pilot. Phone numbers are never blocked automatically.
+- **R5 Automatic user blocks can lock out a real caller.** Two unfounded closures block the **user** for 30 days; tune `HOAX_STRIKES_TO_BLOCK` (0 = no automatic blocks and no strike alerts) and review during the pilot. Phone numbers are never blocked automatically.
 - **R6 24-hour forced close.** A call still active after 24 hours shows as closed in the app.
-- **R7 Phone numbers are unverified.** The per-phone limit and manual phone blocks can be dodged by typing another number, and a hoaxer can give a stranger's number, so phone strikes only alert (`phone_hoax_threshold`); device limits rest on attestation.
+- **R7 Phone numbers are unverified.** The per-phone limit and manual phone blocks affect the account phone; SMS verification is required before a public release (plan §9). Phone strikes only alert (`phone_hoax_threshold`).
 - **R8 Shared static egress IP.** See Railway step 5.
 - **R9 Single department.** A second department needs a schema migration and per-department config.
+- **Live unit positions (D11).** Showing unit coordinates to the public caller is a pilot decision to re-validate before general release.
