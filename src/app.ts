@@ -1,4 +1,5 @@
 import fastifySwagger from '@fastify/swagger';
+import fastifySwaggerUi from '@fastify/swagger-ui';
 import type { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
 import Fastify, {
   type FastifyBaseLogger,
@@ -179,6 +180,12 @@ export async function buildPublicApp(ctx: AppContext, options: PublicAppOptions 
   });
 
   app.get('/v1/openapi.json', { schema: { hide: true } }, async () => app.swagger());
+  // A browsable view of the same document. Its routes are hidden from it; the per-IP limit applies.
+  await app.register(fastifySwaggerUi, {
+    routePrefix: '/v1/docs',
+    staticCSP: true,
+    uiConfig: { docExpansion: 'list', deepLinking: true },
+  });
 
   await intakeRoutes(app, ctx);
   await sosRoutes(app, ctx);

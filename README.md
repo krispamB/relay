@@ -6,7 +6,7 @@ The relay is the only server the public SOS mobile app talks to. Signed-in users
 |---|---|
 | [`sos-relay-PRD.md`](sos-relay-PRD.md) | What the relay does, the public API, delivery rules, limits, deployment, acceptance criteria, open risks. The source of truth for behaviour. |
 | [`integration.md`](integration.md) | The contract with Resgrid Core: endpoints, auth, errors, the Core-side setup (section 10) and the live test checklist (section 11). Wins over the PRD on anything about Core. |
-| [`docs/app-api-contract.md`](docs/app-api-contract.md) | **For the app team:** every endpoint the app uses, what to send, every answer and what to do with it, retries, limits, live WebSocket. The OpenAPI document is [`docs/openapi.json`](docs/openapi.json) (served at `/v1/openapi.json`; regenerate with `npm run openapi`). |
+| [`docs/app-api-contract.md`](docs/app-api-contract.md) | **For the app team:** every endpoint the app uses, what to send, every answer and what to do with it, retries, limits, live WebSocket. The OpenAPI document is [`docs/openapi.json`](docs/openapi.json) (served at `/v1/openapi.json`, browsable as Swagger UI at `/v1/docs`; regenerate with `npm run openapi`). The `GET /v1/live` WebSocket is not in it: see the contract. |
 | [`docs/live-sos-plan.md`](docs/live-sos-plan.md) | Design for the live SOS pilot: phone sign-in, one-tap SOS, recordings, live status, data model. |
 | [`docs/live-sos-seams.md`](docs/live-sos-seams.md) | Module boundaries and contracts between the live-SOS slices. |
 | [`docs/auth-contract.md`](docs/auth-contract.md) | **For the app:** sign-up, sign-in, sessions, `GET /v1/me`, with their own error codes. Auth is always on. Plan: [`docs/auth-implementation-plan.md`](docs/auth-implementation-plan.md). |

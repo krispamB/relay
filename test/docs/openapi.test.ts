@@ -46,6 +46,25 @@ describe('docs/openapi.json', () => {
     }
   });
 
+  it('is browsable as Swagger UI at /v1/docs, which loads the same document, and adds no paths to it', async () => {
+    const app = await buildPublicApp(createTestContext({ config: testConfig() }));
+    try {
+      const page = await app.inject({ method: 'GET', url: '/v1/docs/' });
+      expect(page.statusCode).toBe(200);
+      expect(page.headers['content-type']).toMatch(/^text\/html/);
+      expect(page.body).toContain('swagger-ui');
+      // Static assets come with a CSP, as the page is served from the public relay.
+      const asset = await app.inject({ method: 'GET', url: '/v1/docs/static/swagger-ui-bundle.js' });
+      expect(asset.statusCode).toBe(200);
+      expect(asset.headers['content-security-policy']).toBeDefined();
+      const spec = await app.inject({ method: 'GET', url: '/v1/docs/json' });
+      expect(spec.json()).toEqual(JSON.parse(await readFile(OPENAPI_FILE, 'utf8')));
+      expect(Object.keys((spec.json() as Doc).paths).some((p) => p.startsWith('/v1/docs'))).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('documents the auth endpoints under the auth tag', async () => {
     const doc = await committed();
     for (const [method, path] of AUTH_OPERATIONS) {
