@@ -51,6 +51,7 @@ function standInConfig(): Config {
     alertWebhookUrl: undefined,
     demoDispatchAfterS: 30,
     demoCloseAfterS: 90,
+    unitPollIntervalS: 10,
     limits: { ...DEFAULT_LIMITS },
   };
 }

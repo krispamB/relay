@@ -82,7 +82,8 @@ describe('responses (PRD §7.4, app PRD §7.1)', () => {
       accuracy_m: 12,
       location_source: 'gps',
       ip: '203.0.113.7',
-      live_version: '0',
+      // queued → received bumped the live version once (plan §5.3).
+      live_version: '1',
     });
     expect(core.calls).toHaveLength(1);
     expect(core.calls[0]!.submissionId).toBe(res.body.receiptId);

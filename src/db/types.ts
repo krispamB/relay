@@ -43,6 +43,8 @@ export interface SubmissionsTable {
   core_state: number | null;
   failure_reason: string | null;
   next_poll_at: NullableTimestamp;
+  /** When the poller last claimed this SOS for a Core read (migration 007). */
+  last_poll_at: NullableTimestamp;
   accepted_at: Timestamp;
   delivered_at: NullableTimestamp;
   closed_at: NullableTimestamp;

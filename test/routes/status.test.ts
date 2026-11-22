@@ -57,18 +57,77 @@ describe('GET /v1/sos/:receiptId/status', () => {
       const res = await poll(id);
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({
+        type: 'state',
+        version: 0,
+        receiptId: id,
         status: s,
         reference: expect.stringMatching(/^SOS-/),
         updatedAt: ctx.clock.now().toISOString(),
+        recording: { status: 'none' },
+        units: [],
       });
     },
   );
 
-  it('returns only status, reference and updatedAt', async () => {
+  it('returns the live snapshot (plan §5.3) and nothing else', async () => {
     const { poll, submit } = await setup();
     const res = await poll(await submit('dispatched'));
-    expect(Object.keys(res.json()).sort()).toEqual(['reference', 'status', 'updatedAt']);
-    expect(res.body).not.toMatch(/Ade|2348012345678|Not breathing|core_call/);
+    expect(Object.keys(res.json()).sort()).toEqual([
+      'receiptId',
+      'recording',
+      'reference',
+      'status',
+      'type',
+      'units',
+      'updatedAt',
+      'version',
+    ]);
+    expect(res.body).not.toMatch(/Ade|2348012345678|Not breathing|core_call|userId/);
+  });
+
+  it('shows the live version, the latest recording and the units on the call', async () => {
+    const { ctx, poll, submit } = await setup(0);
+    const id = await submit('dispatched');
+    await ctx.db.updateTable('submissions').set({ live_version: '7' }).where('id', '=', id).execute();
+    await ctx.db
+      .insertInto('recordings')
+      .values({
+        id: 'rec_01',
+        submission_id: id,
+        seq: 1,
+        idempotency_key: 'k',
+        body_hash: 'h',
+        size: 10,
+        duration_ms: 1000,
+        status: 'attached',
+        created_at: ctx.clock.now(),
+      })
+      .execute();
+    await ctx.db
+      .insertInto('submission_units')
+      .values({
+        submission_id: id,
+        unit_key: 'u_0123456789abcdef0123456789abcdef',
+        unit_type: 'Ambulance',
+        status_text: 'En Route',
+        lat: 6.53,
+        lon: 3.3792,
+        status_at: ctx.clock.now(),
+      })
+      .execute();
+    const body = (await poll(id)).json();
+    expect(body).toMatchObject({ version: 7, recording: { status: 'attached' } });
+    expect(body.units).toEqual([
+      {
+        key: 'u_0123456789abcdef0123456789abcdef',
+        type: 'Ambulance',
+        status: 'En Route',
+        lat: 6.53,
+        lon: 3.3792,
+        distanceM: 623,
+        updatedAt: ctx.clock.now().toISOString(),
+      },
+    ]);
   });
 
   it('never calls Core (unusedCore throws on any call)', async () => {

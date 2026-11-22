@@ -159,7 +159,18 @@ SOS body validator in `src/sos/validate.ts`; `protocol.ts` only checks shape and
 export async function readSnapshot(db: Db, submissionId: string, userId: string, now: Date): Promise<LiveSnapshot | null>;
 /** Same, without the owner check, for fan-out after a NOTIFY. */
 export async function readSnapshotById(db: Db, submissionId: string, now: Date): Promise<(LiveSnapshot & { userId: string }) | null>;
+
+// src/live/watch.ts: call on subscribe and on every ping.
+export const WATCH_MS: number;            // 60 s
+export const WATCHED_INTERVAL_MS: number; // 15 s, the per-call floor
+/** live_watch_until = max(current, now + 60 s); a dispatched or closed SOS's next GetCall is pulled
+ *  earlier, never below last_poll_at + 15 s. Unknown ids are ignored. */
+export async function watchSubmission(db: Db, submissionId: string, now: Date): Promise<void>;
 ```
+
+Snapshot reads run in one repeatable-read transaction. `updatedAt` is the latest status change.
+Migration `007_live_poll_floor.sql` adds `submissions.last_poll_at` (when the poller last claimed the
+row for a Core read), which the floor counts from.
 
 ## Rules for every stream
 

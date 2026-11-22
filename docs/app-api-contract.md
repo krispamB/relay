@@ -281,8 +281,9 @@ HTTP/1.1 201 Created
 
 ### 4.3 `GET /v1/sos/:receiptId/status`
 
-Returns the **live snapshot** for one SOS ([§5.3](#53-snapshot-state-message)). Same JSON shape as
-a `{type:"state"}` message on the WebSocket, without the `type` wrapper.
+Returns the **live snapshot** for one SOS ([§5.3](#53-snapshot-state-message)): exactly the
+`{type:"state"}` message the WebSocket sends, `type` included, so the app can feed both into the same
+code. Compare `version` the same way.
 
 **When:** fallback when the socket is unavailable; not faster than once per 5 seconds per receipt.
 
@@ -409,8 +410,18 @@ Relay → app: `{ "type": "state", … }` with:
 | `recording.status` | `none`, `pending`, `attached`, or `dropped` (last recording). |
 | `units` | Only when `status` is `dispatched`. Unit **type**, status text, coordinates, straight-line `distanceM` (no names or call signs). Empty until a unit's Core destination is this call; until then the UI shows waiting copy (see plan D12). |
 | `distanceM` | Haversine from caller's live location if under 2 minutes old, else incident location, else omitted. |
+| `units[].key` | A stable opaque id for one unit (`u_` + 32 hex), the same on every snapshot, so the map can move one marker. It is not Core's unit id. |
 
-HTTP `GET /v1/sos/:receiptId/status` returns this object **without** the `"type": "state"` field.
+**Freshness.** While the app is subscribed (subscribe, then a ping every 25 s), the relay reads the
+call every 15 s and the units every `UNIT_POLL_INTERVAL_S` (default 10 s). When nobody has watched
+for 60 s it falls back to the slow schedule (15 s received, 60 s dispatched, 5 min closed) and stops
+reading units: the last units seen stay in the snapshot, each with its own `updatedAt`, until the SOS
+leaves `dispatched`. The HTTP status route reads the database only and does not count as watching.
+
+HTTP `GET /v1/sos/:receiptId/status` returns this same object, `"type": "state"` included.
+
+`updatedAt` is the time of the last **status** change (not of a unit or recording change; those
+show in `version`).
 
 Relay may also send `{ "type": "pong" }` and `{ "type": "error", "code" }` (shape TBD in build for
 non-fatal protocol errors).

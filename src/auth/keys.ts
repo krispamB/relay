@@ -15,6 +15,11 @@ export interface AuthKeys {
   signupBody: Buffer;
   /** HMAC key for the per-phone sign-in rate limit. The number itself is never stored. */
   signinPhone: Buffer;
+  /**
+   * HMAC key for the public unit key in the live snapshot (src/live/units.ts unitKey), so the app can
+   * follow a unit's marker without learning Core's unit id (docs/live-sos-plan.md §5.1).
+   */
+  liveUnit: Buffer;
 }
 
 const SALT = 'sos-relay/auth/v1';
@@ -35,6 +40,7 @@ export function deriveAuthKeys(secret: string): AuthKeys {
     refresh: derive(secret, 'refresh-token-derivation'),
     signupBody: derive(secret, 'signup-body-hashing'),
     signinPhone: derive(secret, 'signin-phone-hash'),
+    liveUnit: derive(secret, 'live-unit-key'),
   };
 }
 

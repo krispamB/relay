@@ -127,6 +127,7 @@ TEST_DATABASE_URL=postgres://user:pass@localhost:5432/relay_test npm test
 | `CLIENT_IP_HEADER` | Header holding the caller's address. Unset locally. On Railway: `x-real-ip`. Wrong value means every caller shares one IP and the per-IP limits misfire. |
 | `ALERT_WEBHOOK_URL` | Where alerts go. Unset means alerts are only logged. |
 | `RUN_JOBS` | `false` runs the HTTP servers only (jobs elsewhere). |
+| `UNIT_POLL_INTERVAL_S` | Seconds between `GetAllUnitStatuses` calls (default 10, at least 1). The relay reads units only while a caller is watching a `dispatched` SOS; one call covers every SOS in the department. |
 
 ## Auth (demo app)
 

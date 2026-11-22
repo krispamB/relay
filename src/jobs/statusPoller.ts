@@ -7,11 +7,16 @@
  * 2. Demo submissions move on their configured timetable (runs even while paused; never touches Core).
  * 3. Unless delivery is paused: one GetPendingCalls for every due `received` submission, with one
  *    GetCall for each whose call has left the list; then a GetCall for each due `dispatched` (60 s)
- *    and `closed` (5 min) submission.
+ *    and `closed` (5 min) submission; then the unit poll step (src/jobs/unitPoller.ts).
+ *
+ * While the caller watches an SOS (`live_watch_until` in the future, src/live/watch.ts) its GetCall is
+ * due every 15 s whatever its status; when the watch lapses the intervals above apply again.
  *
  * Scheduling lives in `next_poll_at`, so intervals hold across restarts. Rows are claimed by moving
  * `next_poll_at` to the next interval inside a short locking transaction, before Core is called, so a
- * second instance never polls the same row in the same interval. The result is then applied in its
+ * second instance never polls the same row in the same interval. The claim also stamps
+ * `last_poll_at`, and nothing schedules a read before `last_poll_at + 15 s`, so one call is never read
+ * more often than every 15 s (Core's floor) whichever instance reads it. The result is then applied in its
  * own transaction, which re-reads the row and ignores the result if the row changed meanwhile.
  * Alerts are raised only after that transaction commits.
  */
@@ -21,13 +26,15 @@ import { raiseStrikeAlerts, recordHoaxStrikes, removeStrikes, type StrikeOutcome
 import { ALERT_CODES } from '../alerts.js';
 import { addMs, HOUR, MINUTE, SECOND } from '../clock.js';
 import type { AppContext } from '../context.js';
-import type { CallStateResult, CoreResult } from '../core/types.js';
+import type { CallStateResult } from '../core/types.js';
 import { type Db, isUniqueViolation } from '../db/index.js';
 import { OPEN_STATUSES, type Submission, type SubmissionStatus, type SubmissionUpdate } from '../db/types.js';
-import { safeError } from '../errors.js';
-import { METRICS } from '../metrics.js';
-import { getState, pauseDelivery } from '../state.js';
+import { bumpLiveVersion } from '../live/version.js';
+import { isWatched, WATCHED_INTERVAL_MS } from '../live/watch.js';
+import { getState } from '../state.js';
+import { pauseForAuth, safely } from './coreRead.js';
 import type { Job } from './runner.js';
+import { pollUnits } from './unitPoller.js';
 
 export const POLLER_TICK_MS = 1000;
 /** PRD §8.5 intervals. 15 s is also Core's floor for reading any one call (PRD §5.2). */
@@ -59,6 +66,16 @@ const RECEIVED_CLAIM_LOCK = 0x534f_5301;
 
 type PolledStatus = 'received' | 'dispatched' | 'closed';
 
+/** Next read of a row just claimed or changed at `now`: 15 s while watched, else the status interval. */
+function nextPollAt(status: PolledStatus, liveWatchUntil: Date | null, now: Date): Date {
+  return addMs(now, isWatched(liveWatchUntil, now) ? WATCHED_INTERVAL_MS : pollIntervalMs(status));
+}
+
+/** A row last claimed for a read under 15 s ago must not be read again yet. */
+function readableAt(lastPollAt: Date | null, now: Date): boolean {
+  return lastPollAt === null || now.getTime() - lastPollAt.getTime() >= WATCHED_INTERVAL_MS;
+}
+
 export function pollIntervalMs(status: PolledStatus): number {
   switch (status) {
     case 'received':
@@ -82,6 +99,8 @@ const ROW_COLUMNS = [
   'accepted_at',
   'delivered_at',
   'next_poll_at',
+  'last_poll_at',
+  'live_watch_until',
 ] as const;
 
 type Row = Pick<Submission, (typeof ROW_COLUMNS)[number]>;
@@ -107,6 +126,8 @@ export async function runStatusPollerPass(ctx: AppContext): Promise<void> {
   await pollReceived(ctx, pass);
   if (pass.stop) return;
   await pollDispatchedAndClosed(ctx, pass);
+  if (pass.stop) return;
+  await pollUnits(ctx, pass);
 }
 
 function ids(row: Pick<Row, 'id' | 'reference'>): { receiptId: string; reference: string } {
@@ -117,6 +138,7 @@ function pastWindow(acceptedAt: Date, now: Date): boolean {
   return now.getTime() - acceptedAt.getTime() >= STATUS_WINDOW_MS;
 }
 
+/** A status change, its event, and the live version bump, inside the caller's transaction. */
 async function writeTransition(
   trx: Db,
   row: Pick<Row, 'id' | 'status'>,
@@ -134,6 +156,11 @@ async function writeTransition(
     .insertInto('submission_events')
     .values({ submission_id: row.id, from_status: row.status, to_status: to, cause, at: now })
     .execute();
+  // Units are shown only while dispatched (plan §5.1): their rows go when the SOS leaves it.
+  if (row.status === 'dispatched' && to !== 'dispatched') {
+    await trx.deleteFrom('submission_units').where('submission_id', '=', row.id).execute();
+  }
+  await bumpLiveVersion(trx, row.id);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -249,30 +276,6 @@ async function advanceDemo(ctx: AppContext): Promise<void> {
 // 3. Core reads
 // ---------------------------------------------------------------------------------------------
 
-/** The client is not supposed to throw; if it does, treat it as a transient failure. */
-async function safely<T>(ctx: AppContext, fn: () => Promise<CoreResult<T>>): Promise<CoreResult<T>> {
-  try {
-    return await fn();
-  } catch (err) {
-    ctx.log.error({ error: safeError(err) }, 'core client threw');
-    return { kind: 'retryable', reason: 'client error' };
-  }
-}
-
-/** PRD §8.4: pause, and raise the critical alert only if this call is the one that paused. */
-async function pauseForAuth(ctx: AppContext, reason: string): Promise<void> {
-  const flipped = await pauseDelivery(ctx.db, ctx.clock.now(), reason);
-  ctx.log.error({ reason, flipped }, 'Core refused the API key; delivery paused');
-  if (flipped) {
-    ctx.metrics.set(METRICS.paused, 1);
-    await ctx.alerts.raise({
-      severity: 'critical',
-      code: ALERT_CODES.deliveryPaused,
-      message: `SOS delivery paused: ${reason}`,
-    });
-  }
-}
-
 async function pollReceived(ctx: AppContext, pass: PassState): Promise<void> {
   const claimed = await ctx.db.transaction().execute(async (trx) => {
     await sql`SELECT pg_advisory_xact_lock(${RECEIVED_CLAIM_LOCK}::bigint)`.execute(trx);
@@ -302,18 +305,31 @@ async function pollReceived(ctx: AppContext, pass: PassState): Promise<void> {
       .forUpdate()
       .skipLocked()
       .execute();
-    if (rows.length > 0) {
+    if (rows.length === 0) return [];
+    await trx
+      .updateTable('submissions')
+      .set({ next_poll_at: addMs(now, RECEIVED_INTERVAL_MS) })
+      .where(
+        'id',
+        'in',
+        rows.map((r) => r.id),
+      )
+      .execute();
+    // A row claimed early (due within the next 15 s) may have been read under 15 s ago, e.g. by a
+    // GetCall that moved it back to received. It shares this GetPendingCalls but gets no GetCall now.
+    const readable = rows.filter((r) => readableAt(r.last_poll_at, now));
+    if (readable.length > 0) {
       await trx
         .updateTable('submissions')
-        .set({ next_poll_at: addMs(now, RECEIVED_INTERVAL_MS) })
+        .set({ last_poll_at: now })
         .where(
           'id',
           'in',
-          rows.map((r) => r.id),
+          readable.map((r) => r.id),
         )
         .execute();
     }
-    return rows;
+    return rows.map((r) => ({ ...r, readable: readableAt(r.last_poll_at, now) }));
   });
   if (claimed.length === 0) return;
 
@@ -340,6 +356,10 @@ async function pollReceived(ctx: AppContext, pass: PassState): Promise<void> {
     }
     // Still in the pending list: still received. Nothing to read, nothing to write.
     if (pending.has(row.core_call_id)) continue;
+    if (!row.readable) {
+      ctx.log.info(ids(row), 'call left the pending list; read under 15 s ago, GetCall at the next interval');
+      continue;
+    }
     await pollOne(ctx, pass, row);
     if (pass.stop) return;
   }
@@ -355,17 +375,28 @@ async function pollDispatchedAndClosed(ctx: AppContext, pass: PassState): Promis
       .where('is_demo', '=', false)
       .where('next_poll_at', '<=', now)
       .where('accepted_at', '>', new Date(now.getTime() - STATUS_WINDOW_MS))
+      // Belt and braces: nothing schedules a read this early, but the floor must hold regardless.
+      .where((eb) =>
+        eb.or([
+          eb('last_poll_at', 'is', null),
+          eb('last_poll_at', '<=', new Date(now.getTime() - WATCHED_INTERVAL_MS)),
+        ]),
+      )
       .orderBy('next_poll_at')
       .limit(BATCH)
       .forUpdate()
       .skipLocked()
       .execute();
-    for (const status of ['dispatched', 'closed'] as const) {
-      const of = rows.filter((r) => r.status === status).map((r) => r.id);
-      if (of.length === 0) continue;
+    // Rows due at the same time are scheduled with one UPDATE.
+    const byNext = new Map<number, string[]>();
+    for (const r of rows) {
+      const at = nextPollAt(r.status as PolledStatus, r.live_watch_until, now).getTime();
+      byNext.set(at, [...(byNext.get(at) ?? []), r.id]);
+    }
+    for (const [at, of] of byNext) {
       await trx
         .updateTable('submissions')
-        .set({ next_poll_at: addMs(now, pollIntervalMs(status)) })
+        .set({ next_poll_at: new Date(at), last_poll_at: now })
         .where('id', 'in', of)
         .execute();
     }
@@ -532,7 +563,7 @@ async function applyCallState(ctx: AppContext, claimed: Row, result: CallStateRe
       {
         core_state: coreState,
         closed_at: to === 'closed' ? now : null,
-        next_poll_at: addMs(now, pollIntervalMs(to)),
+        next_poll_at: nextPollAt(to, row.live_watch_until, now),
       },
     );
     return { kind: 'transition', row, to, strikeOutcomes };
