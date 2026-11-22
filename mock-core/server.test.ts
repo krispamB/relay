@@ -580,9 +580,169 @@ describe('fault injection', () => {
   });
 });
 
+describe('SaveCallFile', () => {
+  const audio = Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0xff, 0xfe, 0x01, 0x80]);
+  const fileBody = (callId: string, extra: Record<string, unknown> = {}) => ({
+    CallId: callId,
+    UserId: '00000000-0000-0000-0000-000000000000',
+    Type: 1,
+    Name: 'SOS-7KQ2-1.m4a',
+    Data: audio.toString('base64'),
+    ...extra,
+  });
+  const attach = (body: unknown, headers: Record<string, string> = {}) =>
+    api('CallFiles/SaveCallFile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+    });
+
+  it('attaches a file to a pending call: 201 { Id }, storing the call id, name and decoded size', async () => {
+    const callId = (await save()).json?.Id as string;
+    const res = await attach(fileBody(callId));
+    expect(res.status).toBe(201);
+    expect(res.json?.Status).toBe('created');
+    expect(typeof res.json?.Id).toBe('string');
+    expect(mock.control.files()).toEqual([
+      expect.objectContaining({ Id: res.json?.Id, CallId: callId, Name: 'SOS-7KQ2-1.m4a', Size: 12 }),
+    ]);
+    expect(mock.control.files({ callId: '999' })).toEqual([]);
+  });
+
+  it('also accepts an active call', async () => {
+    const callId = (await save({ ...validBody, IsPending: false })).json?.Id as string;
+    expect((await attach(fileBody(callId))).status).toBe(201);
+  });
+
+  it('refuses a closed call with 400, and attaches nothing', async () => {
+    const callId = (await save()).json?.Id as string;
+    for (const state of [1, 2, 3, 4, 5, 6, 7]) {
+      mock.control.setCallState(callId, state);
+      const res = await attach(fileBody(callId));
+      expect(res.status, `state ${state}`).toBe(400);
+    }
+    expect(mock.control.files()).toEqual([]);
+    mock.control.setCallState(callId, 8); // re-opened
+    expect((await attach(fileBody(callId))).status).toBe(201);
+  });
+
+  it('answers 404 for a call that does not exist or was deleted', async () => {
+    expect((await attach(fileBody('424242'))).status).toBe(404);
+    const callId = (await save()).json?.Id as string;
+    mock.control.deleteCall(callId);
+    expect((await attach(fileBody(callId))).status).toBe(404);
+  });
+
+  it('answers 400 for a missing field, a bad Type or Data that is not base64', async () => {
+    const callId = (await save()).json?.Id as string;
+    for (const bad of [
+      { UserId: '' },
+      { UserId: undefined },
+      { Name: undefined },
+      { Data: '' },
+      { Data: '***not base64***' },
+      { CallId: undefined },
+      { Type: 'x' },
+    ]) {
+      expect((await attach(fileBody(callId, bad))).status, JSON.stringify(bad)).toBe(400);
+    }
+    expect((await attach([1, 2])).status).toBe(400);
+    expect(mock.control.files()).toEqual([]);
+  });
+
+  it('needs calls.update, and the API key', async () => {
+    const callId = (await save()).json?.Id as string;
+    mock.control.setScopes(['calls.create', 'calls.read', 'reference.read', 'units.read']);
+    expect((await attach(fileBody(callId))).status).toBe(403);
+    mock.control.setScopes(['calls.update']);
+    expect((await attach(fileBody(callId))).status).toBe(201);
+    mock.control.setApiKey('other');
+    expect((await attach(fileBody(callId))).status).toBe(401);
+  });
+
+  it('has no idempotency: attaching twice stores two files', async () => {
+    const callId = (await save()).json?.Id as string;
+    const a = await attach(fileBody(callId), { 'Idempotency-Key': 'k' });
+    const b = await attach(fileBody(callId), { 'Idempotency-Key': 'k' });
+    expect(a.json?.Id).not.toBe(b.json?.Id);
+    expect(mock.control.files({ callId })).toHaveLength(2);
+  });
+
+  it('records the request without the audio, and supports faults after processing', async () => {
+    const callId = (await save()).json?.Id as string;
+    mock.control.injectFault('CallFiles/SaveCallFile', { status: 500, afterProcessing: true });
+    expect((await attach(fileBody(callId))).status).toBe(500);
+    expect(mock.control.files({ callId })).toHaveLength(1); // saved, then the answer failed
+    const rec = mock.control.requests({ endpoint: 'CallFiles/SaveCallFile' });
+    expect(rec).toHaveLength(1);
+    expect(JSON.stringify(rec[0])).not.toContain(audio.toString('base64'));
+    expect(rec[0]?.body).toMatchObject({ CallId: callId, Name: 'SOS-7KQ2-1.m4a' });
+  });
+});
+
+describe('GetAllUnitStatuses', () => {
+  const units = [
+    {
+      UnitId: 214,
+      Type: 'Engine',
+      State: 'En Route',
+      DestinationType: 2,
+      DestinationId: 1000,
+      Latitude: 6.5,
+      Longitude: 3.3,
+      Timestamp: '2026-11-22T10:15:30Z',
+    },
+    { UnitId: '9', Type: null, State: 'Available', DestinationType: null, DestinationId: null },
+  ];
+
+  it('returns not_found with an empty list until units are scripted', async () => {
+    const res = await api('UnitStatus/GetAllUnitStatuses');
+    expect(res.status).toBe(200);
+    expect(res.json?.Status).toBe('not_found');
+    expect(res.json?.Data).toEqual([]);
+  });
+
+  it('returns the scripted list, as given, and follows changes', async () => {
+    mock.control.setUnitStatuses(units);
+    const res = await api('UnitStatus/GetAllUnitStatuses');
+    expect(res.json?.Status).toBe('success');
+    expect(res.json?.Data).toEqual(units);
+    mock.control.setUnitStatuses([{ ...units[0]!, Latitude: 6.6 }]);
+    expect((await api('UnitStatus/GetAllUnitStatuses')).json?.Data).toEqual([{ ...units[0], Latitude: 6.6 }]);
+  });
+
+  it('needs units.read, and the API key', async () => {
+    mock.control.setScopes(['calls.read']);
+    expect((await api('UnitStatus/GetAllUnitStatuses')).status).toBe(403);
+    mock.control.setScopes(['units.read']);
+    expect((await api('UnitStatus/GetAllUnitStatuses')).status).toBe(200);
+    expect(
+      (await api('UnitStatus/GetAllUnitStatuses', { headers: { 'X-Resgrid-ApiKey': 'nope' } })).status,
+    ).toBe(401);
+  });
+
+  it('is scripted at start-up with the unitStatuses option, and reset goes back to it', async () => {
+    const m = await startMockCore({ unitStatuses: units });
+    try {
+      const get = () =>
+        fetch(`${m.url}/api/v4/UnitStatus/GetAllUnitStatuses`, { headers: baseHeaders() }).then(
+          (r) => r.json() as Promise<{ Status: string; Data: unknown }>,
+        );
+      expect((await get()).Data).toEqual(units);
+      m.control.setUnitStatuses([]);
+      expect((await get()).Status).toBe('not_found');
+      m.control.reset();
+      expect((await get()).Data).toEqual(units);
+    } finally {
+      await m.close();
+    }
+  });
+});
+
 describe('reset', () => {
   it('restores calls, requests, faults, claims and configuration', async () => {
     await save(validBody, { 'Idempotency-Key': 'r1' });
+    mock.control.setUnitStatuses([{ UnitId: 1 }]);
     mock.control.setScopes([]);
     mock.control.setApiKey('x');
     mock.control.injectFault('*', { status: 500 });
@@ -590,6 +750,8 @@ describe('reset', () => {
     expect(mock.control.calls()).toHaveLength(0);
     expect(mock.control.requests()).toHaveLength(0);
     expect(mock.control.pendingFaults()).toBe(0);
+    expect(mock.control.files()).toHaveLength(0);
+    expect(mock.control.unitStatuses()).toEqual([]);
     const res = await save(validBody, { 'Idempotency-Key': 'r1' });
     expect(res.status).toBe(201);
     expect(mock.control.calls()).toHaveLength(1);
@@ -676,6 +838,31 @@ describe('control endpoints', () => {
     expect((await ctl('POST', 'faults', { endpoint: 'Calls/Nope', status: 500 })).status).toBe(400);
     expect((await ctl('PUT', 'deleted-call-behavior', { mode: 'last_state' })).status).toBe(200);
     expect((await ctl('PUT', 'deleted-call-behavior', { mode: 'x' })).status).toBe(400);
+  });
+
+  it('scripts unit statuses and lists attached files', async () => {
+    expect((await ctl('PUT', 'unit-statuses', [{ UnitId: 5, State: 'On Scene' }])).status).toBe(200);
+    expect((await api('UnitStatus/GetAllUnitStatuses')).json?.Data).toEqual([
+      { UnitId: 5, State: 'On Scene' },
+    ]);
+    expect((await ctl('PUT', 'unit-statuses', { Units: [] })).status).toBe(200);
+    expect((await api('UnitStatus/GetAllUnitStatuses')).json?.Status).toBe('not_found');
+    expect((await ctl('PUT', 'unit-statuses', { nope: 1 })).status).toBe(400);
+    expect((await ctl('PUT', 'unit-statuses', [1])).status).toBe(400);
+
+    const callId = (await save()).json?.Id as string;
+    await api('CallFiles/SaveCallFile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ CallId: callId, UserId: 'u', Type: 1, Name: 'a.m4a', Data: 'AAAA' }),
+    });
+    const files = (await ctl('GET', 'files')).json;
+    expect(files).toEqual([expect.objectContaining({ CallId: callId, Name: 'a.m4a', Size: 3 })]);
+    expect((await ctl('GET', `files?callId=${callId}`)).json).toHaveLength(1);
+    expect((await ctl('GET', 'files?callId=nope')).json).toHaveLength(0);
+    const st = (await ctl('GET', 'state')).json;
+    expect(st.files).toBe(1);
+    expect(st.unitStatuses).toBe(0);
   });
 
   it('resets', async () => {

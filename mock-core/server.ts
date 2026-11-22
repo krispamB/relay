@@ -11,7 +11,16 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 // Public types
 // ---------------------------------------------------------------------------------------------
 
-export type Scope = 'calls.create' | 'calls.read' | 'reference.read';
+export type Scope = 'calls.create' | 'calls.read' | 'calls.update' | 'reference.read' | 'units.read';
+
+/** What the relay's key holds (docs/live-sos-plan.md §2.1, minus calls.close). */
+const DEFAULT_SCOPES: Scope[] = [
+  'calls.create',
+  'calls.read',
+  'calls.update',
+  'reference.read',
+  'units.read',
+];
 
 const ENDPOINT_DEFS = [
   { name: 'Calls/SaveCall', method: 'POST', scope: 'calls.create' },
@@ -20,6 +29,8 @@ const ENDPOINT_DEFS = [
   { name: 'Calls/GetNewCallFieldPolicy', method: 'GET', scope: 'calls.read' },
   { name: 'CallTypes/GetAllCallTypes', method: 'GET', scope: 'reference.read' },
   { name: 'CallPriorities/GetAllCallPriorites', method: 'GET', scope: 'reference.read' },
+  { name: 'CallFiles/SaveCallFile', method: 'POST', scope: 'calls.update' },
+  { name: 'UnitStatus/GetAllUnitStatuses', method: 'GET', scope: 'units.read' },
 ] as const;
 
 type EndpointDef = (typeof ENDPOINT_DEFS)[number];
@@ -80,6 +91,26 @@ export interface StoredCall {
   Deleted: boolean;
 }
 
+/** A file attached with SaveCallFile. The bytes are not kept, only their decoded size. */
+export interface StoredCallFile {
+  /** The attachment id returned by SaveCallFile. */
+  Id: string;
+  CallId: string;
+  Name: string;
+  Type: number;
+  UserId: string;
+  /** Decoded size of Data in bytes. */
+  Size: number;
+  SavedAtUtc: string;
+}
+
+/**
+ * One scripted row of GetAllUnitStatuses, returned exactly as given so a test can send strings,
+ * nulls or numbers. Core's fields: UnitId, Type, State, DestinationType, DestinationId, Latitude,
+ * Longitude, Timestamp.
+ */
+export type UnitStatusRow = Record<string, unknown>;
+
 export interface RecordedRequest {
   seq: number;
   receivedAt: string;
@@ -122,6 +153,8 @@ export interface Fault {
 export interface MockCoreOptions {
   apiKey?: string;
   scopes?: Scope[];
+  /** The list GetAllUnitStatuses returns at start-up and after a reset (default none). */
+  unitStatuses?: UnitStatusRow[];
   /** Names (ids are assigned from 12) or full entries. "No Type" is always added. */
   callTypes?: Array<string | { Id?: string | number; Name: string; BaseType?: number }>;
   priorities?: Array<Partial<PriorityEntry> & { Id: number; Name: string }>;
@@ -153,6 +186,12 @@ export interface MockCoreControl {
   setCallTypes(types: NonNullable<MockCoreOptions['callTypes']>): void;
   setPriorities(priorities: NonNullable<MockCoreOptions['priorities']>): void;
   setFieldPolicy(rules: NonNullable<MockCoreOptions['fieldPolicy']>): void;
+  /** Files attached with SaveCallFile, oldest first, optionally for one call. */
+  files(filter?: { callId?: string | number }): StoredCallFile[];
+  /** The scripted GetAllUnitStatuses list. */
+  unitStatuses(): UnitStatusRow[];
+  /** Replaces the list GetAllUnitStatuses returns (empty = Core's `not_found`). */
+  setUnitStatuses(rows: UnitStatusRow[]): void;
   /** Replaces the scopes granted to the key, e.g. `setScopes(['calls.read', 'reference.read'])`. */
   setScopes(scopes: Scope[]): void;
   setApiKey(key: string): void;
@@ -220,6 +259,27 @@ function isRealPoint(v: unknown): boolean {
 
 function strOrNull(v: unknown): string | null {
   return typeof v === 'string' && v !== '' ? v : null;
+}
+
+function redactFileData(record: RecordedRequest): void {
+  const body = record.body;
+  if (typeof body === 'object' && body !== null && !Array.isArray(body)) {
+    const o = body as Record<string, unknown>;
+    for (const k of Object.keys(o)) {
+      if (lc(k) === 'data' && typeof o[k] === 'string') o[k] = `[${(o[k] as string).length} base64 chars]`;
+    }
+    record.rawBody = JSON.stringify(o);
+  } else {
+    record.rawBody = undefined;
+    record.body = undefined;
+  }
+}
+
+/** Strict base64 (standard alphabet, padded). Core's model binder rejects anything else. */
+function decodeBase64(v: unknown): Buffer | null {
+  if (typeof v !== 'string' || v === '' || v.length % 4 !== 0) return null;
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(v)) return null;
+  return Buffer.from(v, 'base64');
 }
 
 function isJsonContentType(ct: string | undefined): boolean {
@@ -295,7 +355,7 @@ export function createMockCore(options: MockCoreOptions = {}): MockCore {
 
   // --- mutable state ---
   let apiKey = options.apiKey ?? DEFAULT_API_KEY;
-  let scopes = new Set<Scope>(options.scopes ?? ['calls.create', 'calls.read', 'reference.read']);
+  let scopes = new Set<Scope>(options.scopes ?? DEFAULT_SCOPES);
   let callTypes: CallTypeEntry[] = [];
   let priorities: PriorityEntry[] = [];
   let rules: PolicyRule[] = [];
@@ -304,6 +364,9 @@ export function createMockCore(options: MockCoreOptions = {}): MockCore {
   const firstCallId = options.firstCallId ?? 1000;
   let nextCallId = firstCallId;
   let calls = new Map<number, StoredCall>();
+  let files: StoredCallFile[] = [];
+  let nextFileId = 5000;
+  let units: UnitStatusRow[] = [];
   let requestLog: RecordedRequest[] = [];
   let seq = 0;
   let epoch = 0;
@@ -343,7 +406,8 @@ export function createMockCore(options: MockCoreOptions = {}): MockCore {
   }
   function applyInitialConfig(): void {
     apiKey = options.apiKey ?? DEFAULT_API_KEY;
-    scopes = new Set<Scope>(options.scopes ?? ['calls.create', 'calls.read', 'reference.read']);
+    scopes = new Set<Scope>(options.scopes ?? DEFAULT_SCOPES);
+    units = (options.unitStatuses ?? []).map((u) => ({ ...u }));
     callTypes = normalizeTypes(options.callTypes ?? []);
     priorities = normalizePriorities(options.priorities ?? []);
     rules = normalizeRules(options.fieldPolicy ?? []);
@@ -472,6 +536,8 @@ export function createMockCore(options: MockCoreOptions = {}): MockCore {
         } catch {
           ctx.record.body = ctx.record.rawBody;
         }
+        // Keep the log small and free of the audio: the file's size is in control.files().
+        if (def.name === 'CallFiles/SaveCallFile') redactFileData(ctx.record);
       }
       const fault = takeFault(def);
       if (fault) ctx.record.faulted = true;
@@ -750,6 +816,81 @@ export function createMockCore(options: MockCoreOptions = {}): MockCore {
     }),
   );
 
+  // --- SaveCallFile ---
+  // No Idempotency-Key: Core documents none for this endpoint, so a repeat stores a second file.
+  // Core's answer for a call that is not active or pending is not documented (sos-app-PRD.md §15.2
+  // says only "Active or pending calls only"). The mock assumes 400, and 404 for a call that does not
+  // exist or was deleted; the relay's client reads both as "closed". scripts/live-checklist.ts shows
+  // what a real Core answers.
+  const fileDef = ENDPOINT_DEFS[6];
+  app.post(
+    `/api/v4/${fileDef.name}`,
+    endpoint(fileDef, async (req, delay) => {
+      if (!isJsonContentType(req.headers['content-type'])) return { status: 415 };
+      const buf = req.body as Buffer | undefined;
+      let parsed: unknown;
+      try {
+        if (!buf || buf.length === 0) throw new Error('empty');
+        parsed = JSON.parse(buf.toString('utf8'));
+      } catch {
+        return { status: 400 };
+      }
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return { status: 400 };
+      const body = new Body(parsed as Record<string, unknown>);
+
+      await delay();
+
+      const callIdRaw = body.get('CallId');
+      const callIdText = typeof callIdRaw === 'number' ? String(callIdRaw) : callIdRaw;
+      const userId = body.get('UserId');
+      const name = body.get('Name');
+      const type = body.get('Type');
+      const data = decodeBase64(body.get('Data'));
+      if (
+        typeof callIdText !== 'string' ||
+        !/^-?\d+$/.test(callIdText.trim()) ||
+        typeof userId !== 'string' ||
+        userId.trim() === '' ||
+        typeof name !== 'string' ||
+        name.trim() === '' ||
+        typeof type !== 'number' ||
+        !Number.isInteger(type) ||
+        data === null
+      ) {
+        return { status: 400 };
+      }
+      const call = calls.get(Number(callIdText.trim()));
+      if (!call || call.Deleted) return { status: 404 };
+      if (call.State !== 0 && call.State !== 8) {
+        return { status: 400, text: 'The call is not active or pending.' };
+      }
+      const id = String(nextFileId++);
+      files.push({
+        Id: id,
+        CallId: call.CallId,
+        Name: name,
+        Type: type,
+        UserId: userId,
+        Size: data.length,
+        SavedAtUtc: new Date().toISOString(),
+      });
+      return { status: 201, json: envelope('created', { Id: id }) };
+    }),
+  );
+
+  // --- GetAllUnitStatuses ---
+  const unitsDef = ENDPOINT_DEFS[7];
+  app.get(
+    `/api/v4/${unitsDef.name}`,
+    endpoint(unitsDef, async (_req, delay) => {
+      await delay();
+      return {
+        status: 200,
+        json: envelope(units.length === 0 ? 'not_found' : 'success', { Data: units }),
+      };
+    }),
+  );
+
   // Any other /api/v4 path: the key only works on scoped endpoints, so it is ignored and the request gets 401.
   app.setNotFoundHandler(async (req, reply) => {
     if (lc(req.url).startsWith('/api/v4/')) return send(reply, { status: 401 });
@@ -800,6 +941,17 @@ export function createMockCore(options: MockCoreOptions = {}): MockCore {
     setFieldPolicy: (r) => {
       rules = normalizeRules(r);
     },
+    files: (filter) =>
+      files
+        .filter((f) => filter?.callId === undefined || f.CallId === String(filter.callId))
+        .map((f) => ({ ...f })),
+    unitStatuses: () => units.map((u) => ({ ...u })),
+    setUnitStatuses: (rows) => {
+      if (!Array.isArray(rows) || rows.some((r) => typeof r !== 'object' || r === null || Array.isArray(r))) {
+        throw new Error('mock-core: unit statuses must be an array of objects');
+      }
+      units = rows.map((r) => ({ ...r }));
+    },
     setScopes: (s) => {
       scopes = new Set(s);
     },
@@ -828,6 +980,8 @@ export function createMockCore(options: MockCoreOptions = {}): MockCore {
     reset: () => {
       epoch += 1;
       calls = new Map();
+      files = [];
+      nextFileId = 5000;
       nextCallId = firstCallId;
       requestLog = [];
       faults = [];
@@ -845,6 +999,8 @@ export function createMockCore(options: MockCoreOptions = {}): MockCore {
       fieldPolicy: { Rules: rules },
       deletedCallBehavior: deletedBehavior,
       calls: calls.size,
+      files: files.length,
+      unitStatuses: units.length,
       requests: requestLog.length,
       pendingFaults: control.pendingFaults(),
     }),
@@ -946,6 +1102,20 @@ function registerControlRoutes(
       : undefined;
     if (!Array.isArray(rulesIn)) return bad(reply, 'body must be an array of rules or {"Rules": [...]}');
     return guard(reply, () => control.setFieldPolicy(rulesIn as never));
+  });
+  app.get('/__control/files', async (req) => {
+    const q = (req.query ?? {}) as Record<string, string>;
+    return control.files(q.callId === undefined ? undefined : { callId: q.callId });
+  });
+  app.put('/__control/unit-statuses', async (req, reply) => {
+    const r = json(req);
+    const list = r.ok
+      ? Array.isArray(r.value)
+        ? r.value
+        : (r.value as { Units?: unknown }).Units
+      : undefined;
+    if (!Array.isArray(list)) return bad(reply, 'body must be an array of unit rows or {"Units": [...]}');
+    return guard(reply, () => control.setUnitStatuses(list as UnitStatusRow[]));
   });
   app.put('/__control/scopes', async (req, reply) => {
     const r = json(req);

@@ -101,6 +101,8 @@ export function unusedCore(): CoreClient {
     getCallTypes: fail('getCallTypes'),
     getCallPriorities: fail('getCallPriorities'),
     getFieldPolicy: fail('getFieldPolicy'),
+    saveCallFile: fail('saveCallFile'),
+    getAllUnitStatuses: fail('getAllUnitStatuses'),
   };
 }
 
