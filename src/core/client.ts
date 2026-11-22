@@ -314,7 +314,8 @@ export function createCoreClient(cfg: CoreClientConfig, deps: CoreClientDeps): C
       result = custom ?? classifyFailure(raw);
     }
     requestId ??= headerRequestId(raw);
-    if (result.kind === 'ok' && requestId !== undefined) result = { ...(result as CoreResult<T>), requestId } as CoreResult<T>;
+    if (result.kind === 'ok' && requestId !== undefined)
+      result = { ...(result as CoreResult<T>), requestId } as CoreResult<T>;
 
     deps.metrics.inc(METRICS.coreCalls, { endpoint, result: result.kind });
     deps.metrics.observe(METRICS.coreLatency, seconds, { endpoint });

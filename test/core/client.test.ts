@@ -564,7 +564,11 @@ describe('saveCallFile (CallFiles/SaveCallFile)', () => {
     handler = (_r, res) => reply(res, 409);
     expect(await client.saveCallFile(file)).toEqual({ kind: 'conflict' });
     handler = (_r, res) => reply(res, 413, 'too big');
-    expect(await client.saveCallFile(file)).toEqual({ kind: 'rejected', httpStatus: 413, message: 'too big' });
+    expect(await client.saveCallFile(file)).toEqual({
+      kind: 'rejected',
+      httpStatus: 413,
+      message: 'too big',
+    });
   });
   it('429 carries Retry-After; 5xx, a dropped connection and bad JSON are retryable', async () => {
     handler = (_r, res) => reply(res, 429, undefined, { 'retry-after': '7' });
@@ -708,7 +712,11 @@ describe('getAllUnitStatuses (UnitStatus/GetAllUnitStatuses)', () => {
 
   it('reads a timestamp without a zone as UTC', async () => {
     handler = (_r, res) =>
-      reply(res, 200, envelope({ Status: 'success', Data: [{ UnitId: 1, Timestamp: '2026-11-22T10:15:30' }] }));
+      reply(
+        res,
+        200,
+        envelope({ Status: 'success', Data: [{ UnitId: 1, Timestamp: '2026-11-22T10:15:30' }] }),
+      );
     const r = await client.getAllUnitStatuses();
     expect(r.kind === 'ok' && r.data.units[0]?.timestamp).toBe('2026-11-22T10:15:30.000Z');
   });

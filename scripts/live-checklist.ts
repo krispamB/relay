@@ -20,7 +20,7 @@ const USAGE = `Usage: npx tsx scripts/live-checklist.ts --yes-create-test-calls 
 
 Environment (all required):
   RESGRID_API_BASE        e.g. https://api.resgrid.example (no /api/v4)
-  RESGRID_API_KEY         the relay's key (scopes calls.create, calls.read, reference.read)
+  RESGRID_API_KEY         the relay's key (scopes calls.create, calls.read, calls.update, units.read, reference.read)
   RESGRID_CALL_TYPE_NAME  the call type name the relay will use
   RESGRID_PRIORITY_ID     the call priority id the relay will use (integer)
 
@@ -875,6 +875,197 @@ async function check14b(): Promise<void> {
   );
 }
 
+/** A tiny, valid-looking m4a header: the checklist attaches this, never real audio. */
+const SAMPLE_FILE = Buffer.from([
+  0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x4d, 0x34, 0x41, 0x20, 0x00, 0x00, 0x00, 0x00, 0x4d, 0x34,
+  0x41, 0x20, 0x6d, 0x70, 0x34, 0x32,
+]);
+
+/** A SaveCallFile body, as the client sends it, for the raw probes. */
+function fileBody(callId: string, name: string): Record<string, unknown> {
+  return {
+    CallId: callId,
+    UserId: '00000000-0000-0000-0000-000000000000',
+    Type: 1,
+    Name: name,
+    Data: SAMPLE_FILE.toString('base64'),
+  };
+}
+
+/** 15. SaveCallFile: attach to a pending call, and what Core answers for a call that is not open. */
+async function check15(): Promise<void> {
+  const title = 'SaveCallFile attaches a file to a pending call, and refuses a closed or unknown call';
+  const evidence: string[] = [];
+  const problems: string[] = [];
+
+  const made = await rawSave(body('attach'), 'check 15: attached a test file');
+  if (!made.id) return record('15', title, 'FAIL', `could not create the call to attach to: ${brief(made)}`);
+  const id = made.id;
+
+  // 1. The client, as the relay uses it.
+  const name = `CHK-${runId}-1.m4a`;
+  const ok = await client.saveCallFile({ callId: id, name, data: SAMPLE_FILE });
+  if (ok.kind === 'ok') evidence.push(`pending call ${id}: attached as file ${ok.data.fileId}`);
+  else problems.push(`attach to pending call ${id} gave ${JSON.stringify(ok)}, expected ok`);
+
+  // 2. The raw answer, and whether an Idempotency-Key is honoured (a measurement, plan §2.2).
+  const key = idemKey();
+  const a = await raw('POST', 'CallFiles/SaveCallFile', {
+    body: fileBody(id, `CHK-${runId}-idem.m4a`),
+    headers: { 'Idempotency-Key': key },
+  });
+  const b = await raw('POST', 'CallFiles/SaveCallFile', {
+    body: fileBody(id, `CHK-${runId}-idem.m4a`),
+    headers: { 'Idempotency-Key': key },
+  });
+  if (a.status !== 201) problems.push(`raw attach: ${brief(a)}, expected HTTP 201 with an Id`);
+  else if (idOf(a) === undefined)
+    problems.push(`raw attach: HTTP 201 without an Id in ${JSON.stringify(a.text.slice(0, 120))}`);
+  else {
+    const honoured = a.status === b.status && idOf(a) === idOf(b);
+    const finding = `SaveCallFile with the same Idempotency-Key twice: ids ${idOf(a)} and ${idOf(b) ?? brief(b)}, so the key is ${honoured ? 'HONOURED' : 'NOT honoured (a retry after a lost 201 attaches twice)'}`;
+    measurements.push(finding);
+    evidence.push(finding);
+  }
+  if (interactive) {
+    say(`\n[15] ${title}`);
+    const seen = await confirm(
+      `Open call ${id} ("${PREFIX} attach ${runId}") in Resgrid. Is "${name}" attached (plus the "CHK-${runId}-idem.m4a" file(s))?`,
+    );
+    if (!seen) problems.push('the operator did not see the attached file on the call');
+    else evidence.push('operator saw the file on the call');
+  } else {
+    evidence.push(`check by hand that call ${id} shows ${name} (--no-interactive)`);
+  }
+
+  // 3. A call that does not exist. Core's answer is not documented; the client must read it as closed.
+  const ghost = '2147483000';
+  const gr = await raw('POST', 'CallFiles/SaveCallFile', { body: fileBody(ghost, `CHK-${runId}-x.m4a`) });
+  const gc = await client.saveCallFile({ callId: ghost, name: `CHK-${runId}-x.m4a`, data: SAMPLE_FILE });
+  const ghostFinding = `unknown call ${ghost}: ${brief(gr)} -> client says ${gc.kind}`;
+  measurements.push(`SaveCallFile, unknown call: ${brief(gr)}`);
+  evidence.push(ghostFinding);
+  if (gc.kind !== 'call_closed') {
+    problems.push(
+      `unknown call is not read as call_closed (${gc.kind}): update CALL_CLOSED_STATUSES in src/core/client.ts`,
+    );
+  }
+
+  // 4. A closed call. Closing needs the Resgrid UI (the key has no calls.close).
+  const closedSteps = [
+    `In Resgrid, dispatch call ${id} ("${PREFIX} attach ${runId}") if needed, then CLOSE it (any close type).`,
+    `Try to attach a file to it: curl -s -XPOST -H "X-Resgrid-ApiKey: $RESGRID_API_KEY" -H 'Content-Type: application/json' -d '{"CallId":"${id}","UserId":"00000000-0000-0000-0000-000000000000","Type":1,"Name":"x.m4a","Data":"AAAA"}' "$RESGRID_API_BASE/api/v4/CallFiles/SaveCallFile"`,
+    'Record the HTTP status and body. It must be one of 400, 404, 410, which the client reads as call_closed.',
+  ];
+  if (!interactive) {
+    record(
+      '15',
+      title,
+      problems.length ? 'FAIL' : 'SKIP',
+      [
+        ...evidence,
+        ...problems.map((p) => `PROBLEM: ${p}`),
+        'closed-call answer NOT measured: manual step, not run (--no-interactive)',
+      ].join('; '),
+    );
+    say('      MANUAL STEP:');
+    for (const [i, st] of closedSteps.entries()) say(`        ${i + 1}. ${st}`);
+    say(
+      '      EXPECT: HTTP 400, 404 or 410 (what the client maps to call_closed). Anything else: change src/core/client.ts.',
+    );
+    return;
+  }
+  await pressEnter(
+    `Close call ${id} ("${PREFIX} attach ${runId}") in Resgrid now (dispatch it first if Core needs that).`,
+  );
+  await sleep(1000);
+  const cr = await raw('POST', 'CallFiles/SaveCallFile', { body: fileBody(id, `CHK-${runId}-closed.m4a`) });
+  const cc = await client.saveCallFile({ callId: id, name: `CHK-${runId}-closed.m4a`, data: SAMPLE_FILE });
+  const closedFinding = `closed call ${id}: ${brief(cr)} -> client says ${cc.kind}`;
+  measurements.push(`SaveCallFile, closed call: ${brief(cr)}`);
+  evidence.push(closedFinding);
+  if (cc.kind !== 'call_closed') {
+    problems.push(
+      `a closed call is not read as call_closed (${cc.kind}; ${brief(cr)}): update CALL_CLOSED_STATUSES in src/core/client.ts`,
+    );
+  }
+  record(
+    '15',
+    title,
+    problems.length ? 'FAIL' : 'PASS',
+    [...evidence, ...problems.map((p) => `PROBLEM: ${p}`)].join('; '),
+  );
+}
+
+/** 16. GetAllUnitStatuses: the response has the shape the relay maps. */
+async function check16(): Promise<void> {
+  const title = 'GetAllUnitStatuses returns the fields the relay maps (units.read)';
+  const r = await raw('GET', 'UnitStatus/GetAllUnitStatuses');
+  if (r.status === 401 || r.status === 403) {
+    return record('16', title, 'FAIL', `${brief(r)}: the key lacks units.read`);
+  }
+  if (r.status !== 200 || !r.json) return record('16', title, 'FAIL', brief(r));
+  const status = r.json.Status;
+  if (status !== 'success' && status !== 'not_found') {
+    return record(
+      '16',
+      title,
+      'FAIL',
+      `HTTP 200 but Status ${JSON.stringify(status)}, expected "success" or "not_found"`,
+    );
+  }
+  const viaClient = await client.getAllUnitStatuses();
+  if (viaClient.kind !== 'ok')
+    return record('16', title, 'FAIL', `the client could not read it: ${viaClient.kind}`);
+  const rows = Array.isArray(r.json.Data)
+    ? (r.json.Data as unknown[]).filter(
+        (x): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x),
+      )
+    : [];
+  if (rows.length === 0) {
+    return record(
+      '16',
+      title,
+      'SKIP',
+      `Status ${JSON.stringify(status)} with no units: the field names are NOT verified. Add a unit to the test department, give it a status with a call destination, and run again.`,
+    );
+  }
+  const expected = [
+    'UnitId',
+    'Type',
+    'State',
+    'DestinationType',
+    'DestinationId',
+    'Latitude',
+    'Longitude',
+    'Timestamp',
+  ];
+  const present = new Set(rows.flatMap((x) => Object.keys(x)));
+  const absent = expected.filter((k) => !present.has(k));
+  const typeOf = (k: string): string => {
+    const kinds = new Set(rows.map((x) => (x[k] === null ? 'null' : typeof x[k])));
+    return [...kinds].join('|');
+  };
+  const types = expected.filter((k) => present.has(k)).map((k) => `${k}:${typeOf(k)}`);
+  const noId = rows.filter((x) => x.UnitId === undefined || x.UnitId === null || x.UnitId === '').length;
+  const toCall = viaClient.data.units.filter((u) => u.destinationType === 2).length;
+  const finding = `GetAllUnitStatuses fields: ${types.join(', ')}${absent.length ? `; absent in every row: ${absent.join(', ')}` : ''}`;
+  measurements.push(finding);
+  const problems: string[] = [];
+  if (noId > 0) problems.push(`${noId} row(s) have no UnitId`);
+  if (!present.has('UnitId')) problems.push('no row has UnitId');
+  record(
+    '16',
+    title,
+    problems.length ? 'FAIL' : 'PASS',
+    [
+      `${rows.length} unit(s), ${viaClient.data.units.length} mapped, ${toCall} heading to a call`,
+      finding,
+      ...problems.map((p) => `PROBLEM: ${p}`),
+    ].join('; '),
+  );
+}
+
 // ---------------------------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------------------------
@@ -941,6 +1132,8 @@ async function main(): Promise<number> {
     check13,
     check14a,
     check14b,
+    check15,
+    check16,
   );
   for (const step of steps) {
     try {
