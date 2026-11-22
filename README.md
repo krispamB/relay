@@ -232,6 +232,8 @@ One outbound webhook (`ALERT_WEBHOOK_URL`); body `{severity, code, text, referen
 
 `GET /metrics` on the admin port (Prometheus text format), behind the admin token. Counters: submissions by outcome, Core calls by endpoint and result, attestation results, rate-limit refusals by rule, and with auth on `auth_signups_total` (created, replay), `auth_signins_total` (success, invalid_credentials, rate_limited), `auth_refreshes_total` (rotated, grace, reuse_detected, revoked, invalid, rate_limited) and `auth_signouts_total` (revoked, noop). Histograms: Core latency and `POST /v1/sos` latency. Gauges: `sos_queue_depth`, `sos_oldest_queued_age_seconds`, `sos_delivery_paused`. Metrics and logs carry no phone number, name, coordinate or free text.
 
+Recordings: `recordings_uploaded_total` (accepted, replay, recording_limit, sos_closed, key_reused), `recordings_attached_total` and `recordings_dropped_total` by reason (call_closed, sos_closed, sos_failed, attempts_exhausted, core_rejected, window_ended, no_bytes). The attach worker (`recordings` job) sends each stored recording to Core with `SaveCallFile` once the call exists; a Core 401/403 pauses delivery like SaveCall does. The audio is never logged.
+
 ## Before go-live
 
 None of this is done. Do not point a public app at this relay until each item is ticked.

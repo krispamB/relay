@@ -15,7 +15,9 @@
 
 import { DAY, HOUR } from '../clock.js';
 import type { AppContext } from '../context.js';
+import { bumpLiveVersion } from '../live/version.js';
 import type { Job } from './runner.js';
+import { STATUS_WINDOW_MS } from './statusPoller.js';
 
 export const PURGE_INTERVAL_MS = HOUR;
 export const SUBMISSION_RETENTION_MS = 30 * DAY;
@@ -32,6 +34,8 @@ export const PURGE_BATCH = 500;
 const MAX_BATCHES = 200;
 
 export interface PurgeCounts {
+  /** Pending recordings dropped, their audio cleared, because their SOS left the 24 h window. */
+  recordingsCleared: number;
   submissions: number;
   strikes: number;
   blocks: number;
@@ -69,6 +73,44 @@ function count(res: { numDeletedRows: bigint }): number {
   return Number(res.numDeletedRows);
 }
 
+/**
+ * Docs/live-sos-plan.md §4.4: a recording still `pending` when its SOS leaves the 24 h window is never
+ * going to be attached (the status poller closes the SOS at the same mark, and the attach worker drops
+ * a closed SOS's recording; this is the backstop). Its audio is cleared and it is marked `dropped`, so
+ * the snapshot does not show `pending` for audio that no longer exists. The 30-day deletion of the row
+ * itself is the submission delete below (ON DELETE CASCADE).
+ */
+async function clearStalePendingRecordings(ctx: AppContext, windowCutoff: Date): Promise<number> {
+  let total = 0;
+  for (let i = 0; i < MAX_BATCHES; i++) {
+    const n = await ctx.db.transaction().execute(async (trx) => {
+      const rows = await trx
+        .updateTable('recordings')
+        .set({ status: 'dropped', drop_reason: 'window_ended', bytes: null, next_attempt_at: null })
+        .where(
+          'id',
+          'in',
+          trx
+            .selectFrom('recordings')
+            .innerJoin('submissions', 'submissions.id', 'recordings.submission_id')
+            .select('recordings.id')
+            .where('recordings.status', '=', 'pending')
+            .where('submissions.accepted_at', '<=', windowCutoff)
+            .limit(PURGE_BATCH)
+            .forUpdate('recordings')
+            .skipLocked(),
+        )
+        .returning('submission_id')
+        .execute();
+      for (const id of new Set(rows.map((r) => r.submission_id))) await bumpLiveVersion(trx, id);
+      return rows.length;
+    });
+    total += n;
+    if (n < PURGE_BATCH) break;
+  }
+  return total;
+}
+
 /** One purge pass. Exported for tests. */
 export async function runPurgePass(ctx: AppContext): Promise<PurgeCounts> {
   const { db } = ctx;
@@ -81,6 +123,7 @@ export async function runPurgePass(ctx: AppContext): Promise<PurgeCounts> {
 
   // Postgres has no DELETE ... LIMIT, so each batch is DELETE ... WHERE key IN (SELECT key ... LIMIT n).
   const counts: PurgeCounts = {
+    recordingsCleared: await clearStalePendingRecordings(ctx, new Date(now.getTime() - STATUS_WINDOW_MS)),
     // Events, recordings and units go with their submission (ON DELETE CASCADE).
     submissions: await inBatches(async () =>
       count(

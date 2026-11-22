@@ -40,6 +40,19 @@ export const REDACT_PATHS = [
   '*.*.fullName',
   '*.*.email',
   '*.*.phone',
+  // Recordings (docs/live-sos-plan.md §4.4): the audio and Core's `Data` field (base64 of the audio)
+  // never reach the log. A request or error log carries the audio under one of these names.
+  'Data',
+  '*.Data',
+  '*.*.Data',
+  'bytes',
+  '*.bytes',
+  '*.*.bytes',
+  'audio',
+  '*.audio',
+  'body',
+  '*.body',
+  '*.*.body',
   'req.headers["idempotency-key"]',
   'headers["idempotency-key"]',
 ];

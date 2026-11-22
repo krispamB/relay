@@ -339,6 +339,14 @@ the MP4 `ftyp` box, and the declared duration; it does not decode or transcode a
 | `seq` | 1-based sequence (pilot ships with max 1) |
 | `status` | `pending` until attached or dropped (visible on live snapshot as `recording.status`) |
 
+**What the relay does with it.** The `recordings` job attaches the audio to the Core call with
+`SaveCallFile` as `{reference}-{seq}.m4a` once the call exists (a recording uploaded while the SOS is still
+`queued` waits, and is checked again every 5 s). It retries 5xx, 429 and timeouts with the delivery backoff,
+at most 5 attempts. `recording.status` becomes `attached` when Core has the file, or `dropped` (audio
+discarded) when the call is closed first, the SOS ends `closed` or `failed`, Core refuses the file, the
+attempts run out, or the SOS leaves the 24 h window with the recording still pending. A drop is final: a
+dropped recording still counts toward `RECORDINGS_PER_SOS`.
+
 **Format (app production target):** AAC in `.m4a`, mono, 16 kHz, 32 kbps, max 60 s (~240 KB/min).
 
 ---
