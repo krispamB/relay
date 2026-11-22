@@ -938,7 +938,7 @@ async function check15(): Promise<void> {
     evidence.push(`check by hand that call ${id} shows ${name} (--no-interactive)`);
   }
 
-  // 3. A call that does not exist. Core's answer is not documented; the client must read it as closed.
+  // 3. A call that does not exist. The swagger declares only 400 ProblemDetails; the client must read it as closed.
   const ghost = '2147483000';
   const gr = await raw('POST', 'CallFiles/SaveCallFile', { body: fileBody(ghost, `CHK-${runId}-x.m4a`) });
   const gc = await client.saveCallFile({ callId: ghost, name: `CHK-${runId}-x.m4a`, data: SAMPLE_FILE });
@@ -955,7 +955,7 @@ async function check15(): Promise<void> {
   const closedSteps = [
     `In Resgrid, dispatch call ${id} ("${PREFIX} attach ${runId}") if needed, then CLOSE it (any close type).`,
     `Try to attach a file to it: curl -s -XPOST -H "X-Resgrid-ApiKey: $RESGRID_API_KEY" -H 'Content-Type: application/json' -d '{"CallId":"${id}","UserId":"00000000-0000-0000-0000-000000000000","Type":1,"Name":"x.m4a","Data":"AAAA"}' "$RESGRID_API_BASE/api/v4/CallFiles/SaveCallFile"`,
-    'Record the HTTP status and body. It must be one of 400, 404, 410, which the client reads as call_closed.',
+    'Record the HTTP status and body. It must be 400 (ProblemDetails), which the client reads as call_closed.',
   ];
   if (!interactive) {
     record(
@@ -971,7 +971,7 @@ async function check15(): Promise<void> {
     say('      MANUAL STEP:');
     for (const [i, st] of closedSteps.entries()) say(`        ${i + 1}. ${st}`);
     say(
-      '      EXPECT: HTTP 400, 404 or 410 (what the client maps to call_closed). Anything else: change src/core/client.ts.',
+      '      EXPECT: HTTP 400 ProblemDetails (what the client maps to call_closed). Anything else: change src/core/client.ts.',
     );
     return;
   }

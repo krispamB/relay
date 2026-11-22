@@ -324,12 +324,14 @@ Attaches the caller's voice recording after the pending call exists. The relay s
 ```
 
 - Core **requires** `UserId` but ignores the value; the relay sends a configured placeholder.
-- **201** with `{ "Id" }` is success; store the file id. Active and pending calls only; closed calls are
-  refused (the relay maps that to dropping the recording).
+- **200 or 201** `SaveCallFileResult` with `Id` is success; store the file id. These, and **400**
+  `ProblemDetails`, are the only answers the v4 swagger declares. Active and pending calls only: Core refuses a
+  closed, deleted or unknown call with the 400, which the relay reads as "call closed" and drops the recording.
+  Any other 4xx is unexpected (for example a 404 from a wrong base path) and alerts instead.
 - **Timeouts and 5xx / 429:** retry with backoff like delivery, at most 5 attempts.
 
-**Idempotency:** Core documents no `Idempotency-Key` on `SaveCallFile` (only `SaveCall` honours one; confirm
-against a live Core before relying on this). A retry after a lost **201** can attach the same audio twice.
+**Idempotency:** the v4 swagger declares no `Idempotency-Key` on `SaveCallFile` (only `SaveCall` honours one;
+live checklist check 15 measures it). A retry after a lost **201** can attach the same audio twice.
 The relay accepts that risk—a duplicate audio file is harmless to a dispatcher—and keeps retry counts low.
 `GetFilesForCall` is not available to the department key, so the relay cannot check before attach.
 
@@ -342,8 +344,12 @@ SOS is being watched and at least one watched submission is `dispatched` (plan D
 `DestinationType = 2` (call) and `DestinationId` equals the Core call id (plan D12). Those rows drive the
 live snapshot `units` array in [`app-api-contract.md`](docs/app-api-contract.md).
 
-Unit names and call signs are not sent to the app. Coordinates and status text come from Core's response
-fields the relay maps in code (TBD in build: exact PascalCase field names in the live Core envelope).
+Unit names and call signs are not sent to the app. Each `Data` row is `UnitStatusResultData` (v4 swagger).
+The relay reads `UnitId` (string), `Type` (unit type name), `State` (status text), `DestinationType` and
+`DestinationId` (integers, nullable), `Latitude` and `Longitude` (doubles, nullable) and `TimestampUtc`.
+It ignores `Timestamp`, which is department-local time. It discards the rest (`Name`, `StateId`, `StateCss`,
+`StateStyle`, `DestinationName`, `DestinationAddress`, `DestinationTypeName`, `Note`, `GroupName`, `GroupId`).
+The swagger declares only a 200 for this endpoint.
 
 ---
 
@@ -537,7 +543,7 @@ Run against a real Sentinel dev instance with a test department:
 - [ ] A revoked key returns 401 within about 60 seconds of revocation.
 - [ ] Record what `GetCall` returns for a deleted call, and the longest `Name`, `Nature`, `Address` and `Note` Core accepts.
 - [ ] `SaveCallFile` on an active pending call returns **201** with a file `Id`; the file is visible to dispatch on that call.
-- [ ] `SaveCallFile` on a closed call is refused with the same behaviour the relay expects for "call not active/pending".
+- [ ] `SaveCallFile` on a closed call answers **400** `ProblemDetails` (what the relay reads as "call closed").
 - [ ] `GetAllUnitStatuses` returns at least one unit; moving a unit's destination to the test call id shows it in the relay's filtered list.
 
 ---

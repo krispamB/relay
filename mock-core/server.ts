@@ -106,8 +106,9 @@ export interface StoredCallFile {
 
 /**
  * One scripted row of GetAllUnitStatuses, returned exactly as given so a test can send strings,
- * nulls or numbers. Core's fields: UnitId, Type, State, DestinationType, DestinationId, Latitude,
- * Longitude, Timestamp.
+ * nulls or numbers. Core's fields (v4 swagger UnitStatusResultData): UnitId, Name, Type, State,
+ * StateId, StateCss, StateStyle, Timestamp, TimestampUtc, DestinationId, DestinationType,
+ * DestinationName, DestinationAddress, DestinationTypeName, Note, Latitude, Longitude, GroupName, GroupId.
  */
 export type UnitStatusRow = Record<string, unknown>;
 
@@ -818,10 +819,9 @@ export function createMockCore(options: MockCoreOptions = {}): MockCore {
 
   // --- SaveCallFile ---
   // No Idempotency-Key: Core documents none for this endpoint, so a repeat stores a second file.
-  // Core's answer for a call that is not active or pending is not documented (sos-app-PRD.md §15.2
-  // says only "Active or pending calls only"). The mock assumes 400, and 404 for a call that does not
-  // exist or was deleted; the relay's client reads both as "closed". scripts/live-checklist.ts shows
-  // what a real Core answers.
+  // The v4 swagger declares 200 / 201 SaveCallFileResult and 400 ProblemDetails, nothing else. A call
+  // that is not active or pending, or does not exist, gets the 400; the relay's client reads it as
+  // "closed". scripts/live-checklist.ts confirms it against a real Core.
   const fileDef = ENDPOINT_DEFS[6];
   app.post(
     `/api/v4/${fileDef.name}`,
@@ -860,9 +860,16 @@ export function createMockCore(options: MockCoreOptions = {}): MockCore {
         return { status: 400 };
       }
       const call = calls.get(Number(callIdText.trim()));
-      if (!call || call.Deleted) return { status: 404 };
-      if (call.State !== 0 && call.State !== 8) {
-        return { status: 400, text: 'The call is not active or pending.' };
+      if (!call || call.Deleted || (call.State !== 0 && call.State !== 8)) {
+        return {
+          status: 400,
+          json: {
+            type: null,
+            title: 'Bad Request',
+            status: 400,
+            detail: 'The call is not active or pending.',
+          },
+        };
       }
       const id = String(nextFileId++);
       files.push({

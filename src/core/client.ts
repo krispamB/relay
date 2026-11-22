@@ -22,7 +22,13 @@ export const SAVE_CALL_TIMEOUT_MS = 6000;
 export const READ_TIMEOUT_MS = 5000;
 /** A recording is far bigger than a SaveCall body, so it gets longer. */
 export const SAVE_CALL_FILE_TIMEOUT_MS = 20000;
-const CALL_CLOSED_STATUSES: ReadonlySet<number> = new Set([400, 404, 410]);
+/**
+ * SaveCallFile's declared answers (Core v4 swagger): 200 / 201 `SaveCallFileResult { Id }` and 400
+ * `ProblemDetails`. Core refuses a call that is not active or pending with that 400. Nothing else is
+ * declared, so a 404 (wrong base path, removed route) stays `rejected` and alerts instead of silently
+ * dropping the recording.
+ */
+const CALL_CLOSED_STATUSES: ReadonlySet<number> = new Set([400]);
 /** Core ignores SaveCallFile's UserId (the file is recorded under the department's managing user) but requires the field. */
 export const SAVE_CALL_FILE_USER_ID = '00000000-0000-0000-0000-000000000000';
 
@@ -174,7 +180,8 @@ export function mapUnitStatus(row: unknown): CoreUnitStatus | null {
     destinationId: idOrNull(row.DestinationId),
     latitude: numberOrNull(row.Latitude),
     longitude: numberOrNull(row.Longitude),
-    timestamp: isoOrNull(row.Timestamp),
+    // Core sends both Timestamp (department-local) and TimestampUtc; only the UTC one is safe to read.
+    timestamp: isoOrNull(row.TimestampUtc),
   };
 }
 

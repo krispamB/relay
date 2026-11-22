@@ -545,16 +545,19 @@ describe('saveCallFile (CallFiles/SaveCallFile)', () => {
     expect(await client.saveCallFile(file)).toMatchObject({ kind: 'retryable' });
   });
 
-  // Core does not document its answer for a call that is not active or pending (sos-app-PRD.md §15.2
-  // says only "Active or pending calls only"). The client treats 400 and 404 (and 410) as "closed";
-  // scripts/live-checklist.ts prints what a real Core answers.
-  it.each([400, 404, 410])('HTTP %i → call_closed', async (status) => {
-    handler = (_r, res) => reply(res, status, '"Call is not active"');
+  // The v4 swagger declares only 200 / 201 and 400 ProblemDetails for SaveCallFile; Core answers a call
+  // that is not active or pending with that 400.
+  it('HTTP 400 → call_closed', async () => {
+    handler = (_r, res) => reply(res, 400, '{"title":"Bad Request","status":400}');
     expect(await client.saveCallFile(file)).toEqual({ kind: 'call_closed' });
     expect(metrics.incs).toContainEqual({
       name: METRICS.coreCalls,
       labels: { endpoint: 'SaveCallFile', result: 'call_closed' },
     });
+  });
+  it.each([404, 410])('HTTP %i is not declared by Core → rejected, not call_closed', async (status) => {
+    handler = (_r, res) => reply(res, status);
+    expect(await client.saveCallFile(file)).toMatchObject({ kind: 'rejected', httpStatus: status });
   });
   it('401 / 403 → auth, 409 → conflict, 413 → rejected', async () => {
     handler = (_r, res) => reply(res, 401);
@@ -623,7 +626,8 @@ describe('getAllUnitStatuses (UnitStatus/GetAllUnitStatuses)', () => {
               DestinationId: 48213,
               Latitude: 6.5244,
               Longitude: 3.3792,
-              Timestamp: '2026-11-22T10:15:30Z',
+              Timestamp: '2026-11-22T11:15:30',
+              TimestampUtc: '2026-11-22T10:15:30Z',
             },
           ],
         }),
@@ -668,10 +672,10 @@ describe('getAllUnitStatuses (UnitStatus/GetAllUnitStatuses)', () => {
               DestinationId: '48213',
               Latitude: '6.5',
               Longitude: ' 3.25 ',
-              Timestamp: '2026-11-22T10:15:30+01:00',
+              TimestampUtc: '2026-11-22T10:15:30+01:00',
             },
             { UnitId: 10, DestinationType: null, DestinationId: null, Latitude: null, Longitude: 'abc' },
-            { UnitId: 11, DestinationType: 0, DestinationId: '', Timestamp: 'not a date' },
+            { UnitId: 11, DestinationType: 0, DestinationId: '', TimestampUtc: 'not a date' },
           ],
         }),
       );
@@ -710,12 +714,15 @@ describe('getAllUnitStatuses (UnitStatus/GetAllUnitStatuses)', () => {
     ]);
   });
 
-  it('reads a timestamp without a zone as UTC', async () => {
+  it('reads TimestampUtc (never the department-local Timestamp), without a zone as UTC', async () => {
     handler = (_r, res) =>
       reply(
         res,
         200,
-        envelope({ Status: 'success', Data: [{ UnitId: 1, Timestamp: '2026-11-22T10:15:30' }] }),
+        envelope({
+          Status: 'success',
+          Data: [{ UnitId: 1, Timestamp: '2026-11-22T11:15:30', TimestampUtc: '2026-11-22T10:15:30' }],
+        }),
       );
     const r = await client.getAllUnitStatuses();
     expect(r.kind === 'ok' && r.data.units[0]?.timestamp).toBe('2026-11-22T10:15:30.000Z');

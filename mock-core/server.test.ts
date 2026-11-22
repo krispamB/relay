@@ -626,11 +626,11 @@ describe('SaveCallFile', () => {
     expect((await attach(fileBody(callId))).status).toBe(201);
   });
 
-  it('answers 404 for a call that does not exist or was deleted', async () => {
-    expect((await attach(fileBody('424242'))).status).toBe(404);
+  it('answers 400 for a call that does not exist or was deleted', async () => {
+    expect((await attach(fileBody('424242'))).status).toBe(400);
     const callId = (await save()).json?.Id as string;
     mock.control.deleteCall(callId);
-    expect((await attach(fileBody(callId))).status).toBe(404);
+    expect((await attach(fileBody(callId))).status).toBe(400);
   });
 
   it('answers 400 for a missing field, a bad Type or Data that is not base64', async () => {
